@@ -1,0 +1,47 @@
+( LOAD )
+@p push . .
+20
+@p !+ unext .
+
+( EMIT & SHIFT )
+( 0000 ) dup . . .
+( 0001 ) @p and !b .
+( 0002 ) 0ff
+( 0003)  @p push . .
+( 0004 ) 7
+( 0005 ) 2/ unext ;
+
+( 2CHAR )
+( 0006 ) @p push . .
+( 0007 ) call:0000 ( CHAR )
+( 0008 ) call:0000 ( CHAR )
+( 0009 ) drop ;
+
+( 4*2CHAR : 2x 2y 2z 2t -- )
+( 000a ) @p push . .
+( 000b ) 3
+( 000c ) call:0006 ( 2CHAR )
+( 000d ) next:000c
+( 000e ) ;
+
+( MESSAGE )
+( 000f ) @p @p @p @p
+( 0010 ) 2121
+( 0011 ) 2021
+( 0012 ) 636f
+( 0013 ) 736b
+( 0014 ) call:000a ( 4*2CHAR )
+( 0015 ) @p @p @p @p
+( 0016 ) 6874
+( 0017 ) 7220
+( 0018 ) 6672
+( 0019 ) 726f
+( 001a ) call:000a ( 4*2CHAR )
+( 001b ) @p @p . .
+( 001c ) 6f63
+( 001d ) 6f6c
+( 001e ) call:0006 ( 2CHAR )
+( 001f ) call:0006 ( 2CHAR )
+( 0020 ) ;
+( START )
+call:000f

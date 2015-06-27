@@ -1,0 +1,8 @@
+( Read two number add them and emit result )
+
+@p @p + .
+100
+200
+!p . . .
+
+

@@ -1,0 +1,13 @@
+( Test F18 multiplication )
+( calculate t:a * s  )
+@p a! @p @p  ( a=2 s=3 t=0 )
+babe
+cafe
+0
+@p push . .
+11
++* unext . .
+!p . . .
+a !p . .
+
+( Result: t=02504 a=33484 )

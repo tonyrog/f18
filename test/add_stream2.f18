@@ -1,0 +1,65 @@
+\
+\  Flavour of add_stream, but this will
+\  pass the code to from [0,0] to [0,1]  (right)
+\  after adding 1 [0,1] will shift data to the left 1 step
+\
+
+@p push . .     ( boot-start )
+0c
+@p !+ unext .   ( boot-end )
+
+( 0000 ) @p a! . .
+( 0001 ) stdin
+( 0002 ) @p b! . .
+( 0003 ) r---
+( 0004 ) @ push . .    ( read header length from stream )
+( 0005 ) @ !b unext .  (  write header to right )
+( 0006 ) @ dup push  . ( get data length to return stack )
+( 0007 ) !b . . .      ( send a copy of length )
+
+( 0008 ) dup dup or .    ( push 1 on to the data stack )
+( 0009 ) dup @ + .       ( add 1 to data )
+( 000a ) !b . . .        ( write to output )
+( 000b ) next:0008       ( loop over data length )
+( 000c ) ;               ( restart processing! )
+( start execute the loaded code )
+call:0000
+
+( HEADER 1 - code for next node )
+10              ( header length -1 for all following headers!  )
+@p push . .     ( boot )
+0a
+@p !+ unext     ( boot-end )
+( 0000 ) @p a! . .
+( 0001 ) --l-       ( read from left )
+( 0002 ) @p b! . .
+( 0003 ) stdout        ( write to stdout )
+( 0004 ) @ push . .    ( read header length from stream )
+( 0005 ) @ !b unext .  (  write header to right )
+( 0006 ) @ push . .    ( data length onto return stack )
+( 0007 ) @ 2* . .      ( multiply data with 2 )
+( 0008 ) !b . . .      ( write to output )
+( 0009 ) next:0007     ( loop over data length )
+( 000a ) ;             ( restart processing! )
+call:0000
+( END-OF-HEADER 1 )
+
+( HEADER 2 - empty )
+00
+dead
+( END-OF-HEADER 2)
+
+( DATA )
+0b     ( data length-1 )
+03
+05
+07
+09
+0b
+0d
+01
+02
+04
+06
+08
+0a

@@ -1,0 +1,51 @@
+\
+\  Example that send a loader that load code
+\  The will pass a header and then compute on
+\  the streamed data (add one to every word)
+\
+
+@p push . .     ( read following length and put on return stack )
+0d
+@p !+ unext .   ( read the code into RAM from 0 and up )
+
+( set A to stdio stream )
+( 0000 )  @p a! . .
+( 0001 )  stdio
+
+( set B to stdio stream )
+( 0002 )  @p b! . .
+( 0003 )  stdio
+
+( --- copy header straight from input to output --- )
+( 0004 ) @p push . .
+( 0005 ) 0
+(  write header to stdio )
+( 0006 ) @ !b unext .
+
+( --- process each data and send to output --- )
+( push data length from stream )
+( 0007 ) @ push . .
+
+( push 1 onto stack )
+( 0008 ) @p . . .
+( 0009 ) 1
+( 000a ) dup @ + .       ( add 1 to data )
+( 000b ) !b . . .        ( write to output )
+( 000c ) next:000a       ( loop over data length )
+( 000d ) ;               ( restart processing! )
+( start execute the loaded code )
+call:0000
+1234  ( header )
+0b    ( data length-1 )
+03
+05
+07
+09
+0b
+0d
+01
+02
+04
+06
+08
+0a
