@@ -674,6 +674,7 @@ int main(int argc, char** argv)
     void* node_mem;
     uint8_t* np_mem;
     size_t alloc_size;
+    size_t stack_size = PAGE(STACK_SIZE);
 
     while((c=getopt(argc, argv, "vtl:d:D:")) != -1) {
 	switch(c) {
@@ -785,7 +786,11 @@ int main(int argc, char** argv)
     // connect the lines with socket pairs
     //
     alloc_size = v*h*(PAGE(NODE_SIZE)+PAGE(STACK_SIZE));
-    // printf("alloc_size = %ld\n", alloc_size);
+    if (flags & FLAG_VERBOSE) {
+	fprintf(stderr, "allocated %ld bytes of memory\n", alloc_size);
+	fprintf(stderr, "stack size is %ld bytes\n", stack_size);
+	fprintf(stderr, "node data size is %ld bytes\n", PAGE(NODE_SIZE));
+    }
 
     if (posix_memalign(&node_mem, PAGE_SIZE, alloc_size)) {
 	perror("posix_memalign (node_mem) failed");
@@ -856,7 +861,7 @@ int main(int argc, char** argv)
 	for (j = 0; j < h; j++) {
 	    node_data_t* dp  = &node[i][j];
 	    pthread_attr_init(&dp->attr);
-	    pthread_attr_setstack(&dp->attr,&dp->stack,PAGE(STACK_SIZE));
+	    pthread_attr_setstack(&dp->attr,&dp->stack,stack_size);
 	    if (pthread_create(&dp->thread,&dp->attr,f18_emu_start,(void*) dp) <0) {
 		perror("pthread_create"); 
 		exit(1);
