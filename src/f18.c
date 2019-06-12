@@ -26,14 +26,17 @@
 #endif
 
 // NOTE! STACK_SIZE is the smallest possible page number I found working
-#define PAGE_SIZE   4096
+#define PAGE_SIZE   g_page_size
+#define PAGE(x)     ((((x)+g_page_size-1)/g_page_size)*g_page_size)
 #define NODE_SIZE   sizeof(node_t)
-#define STACK_SIZE  (2*4096+PTHREAD_STACK_MIN)
-#define PAGE(x)     ((((x)+PAGE_SIZE-1)/PAGE_SIZE)*PAGE_SIZE)
+#define STACK_SIZE  (2*PAGE_SIZE+PTHREAD_STACK_MIN)
+
 
 static int tty_fd = -1;
 static struct termios tty_smode;
 static struct termios tty_rmode;
+static size_t  g_page_size = 0;
+static uint18_t g_flags = 0;
 
 static SIGRETTYPE ctl_c(int);
 static SIGRETTYPE suspend(int);
@@ -43,7 +46,6 @@ typedef struct {
     int      i;
     int      j;
     node_t*  np;
-    void*    stack;
     pthread_t thread;
     pthread_attr_t attr;
 } node_data_t;
@@ -652,7 +654,6 @@ void* f18_emu_start(void *arg)
     return NULL;
 }
 
-
 //
 //  Start F18 emulator
 //  -v verbose   (if debug compiled)
@@ -667,22 +668,23 @@ int main(int argc, char** argv)
     int fd;
     int c;
     int i,j;
-    uint18_t flags = 0;
     useconds_t delay = 0;
     char* opt_layout = NULL;
     uint32_t h=1, v=1;
     void* node_mem;
     uint8_t* np_mem;
     size_t alloc_size;
-    size_t stack_size = PAGE(STACK_SIZE);
 
+    g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
+    g_flags = 0;
+    
     while((c=getopt(argc, argv, "vtl:d:D:")) != -1) {
 	switch(c) {
 	case 'v':
-	    flags |= FLAG_VERBOSE;
+	    g_flags |= FLAG_VERBOSE;
 	    break;
 	case 't':
-	    flags |= FLAG_TRACE;
+	    g_flags |= FLAG_TRACE;
 	    break;
 	case 'l':
 	    opt_layout = optarg;
@@ -700,7 +702,7 @@ int main(int argc, char** argv)
 	    while(*ptr) {
 		if (strncmp(ptr, "reg", 3) == 0) {
 		    if ((ptr[3] == '\0') || (ptr[3] == ',')) {
-			flags |= FLAG_DUMP_REG;
+			g_flags |= FLAG_DUMP_REG;
 			ptr += (ptr[3] == ',') ? 4 : 3;
 		    }
 		    else
@@ -708,7 +710,7 @@ int main(int argc, char** argv)
 		}
 		else if (strncmp(ptr, "ram", 3) == 0) {
 		    if ((ptr[3] == '\0') || (ptr[3] == ',')) {
-			flags |= FLAG_DUMP_RAM;
+			g_flags |= FLAG_DUMP_RAM;
 			ptr += (ptr[3] == ',') ? 4 : 3;
 		    }
 		    else 
@@ -716,7 +718,7 @@ int main(int argc, char** argv)
 		}
 		else if (strncmp(ptr, "rs", 2) == 0) {
 		    if ((ptr[2] == '\0') || (ptr[2] == ',')) {
-			flags |= FLAG_DUMP_RS;
+			g_flags |= FLAG_DUMP_RS;
 			ptr += (ptr[2] == ',') ? 3 : 2;
 		    }
 		    else 
@@ -724,7 +726,7 @@ int main(int argc, char** argv)
 		}
 		else if (strncmp(ptr, "ds", 2) == 0) {
 		    if ((ptr[2] == '\0') || (ptr[2] == ',')) {
-			flags |= FLAG_DUMP_DS;
+			g_flags |= FLAG_DUMP_DS;
 			ptr += (ptr[2] == ',') ? 3 : 2;
 		    }
 		    else 
@@ -773,8 +775,6 @@ int main(int argc, char** argv)
 	if ((v > 8) || (h > 18))
 	    usage(basename(argv[0]));
     }
-    // printf("layout = %d x %d \n", v, h);
-    // printf("sizeof(node_t) = %lu\n", sizeof(node_t));
 
     // allocate HxV nodes threads (example 3x3 )
     // A - B - C
@@ -785,18 +785,22 @@ int main(int argc, char** argv)
     //
     // connect the lines with socket pairs
     //
-    alloc_size = v*h*(PAGE(NODE_SIZE)+PAGE(STACK_SIZE));
-    if (flags & FLAG_VERBOSE) {
-	fprintf(stderr, "allocated %ld bytes of memory\n", alloc_size);
-	fprintf(stderr, "stack size is %ld bytes\n", stack_size);
-	fprintf(stderr, "node data size is %ld bytes\n", PAGE(NODE_SIZE));
+    alloc_size = v*h*(PAGE(NODE_SIZE));
+    if (g_flags & FLAG_VERBOSE) {
+	fprintf(stderr, "page size %ld\n", g_page_size);
+	fprintf(stderr, "alloc size: %ld\n", alloc_size);
+	fprintf(stderr, "stack size: %ld bytes\n", PAGE(STACK_SIZE));
+	fprintf(stderr, "node size: %ld bytes\n", PAGE(NODE_SIZE));
+	fprintf(stderr, "sizeof(node_t): %lu\n", sizeof(node_t));	
+	fprintf(stderr, "layout: %d x %d\n", v, h);
     }
 
-    if (posix_memalign(&node_mem, PAGE_SIZE, alloc_size)) {
+    if (posix_memalign(&node_mem, g_page_size, alloc_size)) {
 	perror("posix_memalign (node_mem) failed");
 	exit(1);
     }
 
+    // reset global node connection 8x18 array
     memset(node, 0, sizeof(node));
 
     // start moving memory into the node data
@@ -808,11 +812,11 @@ int main(int argc, char** argv)
 	    dp->i     = i;
 	    dp->j     = j;
 	    dp->np    = np;
-	    dp->stack = (void*) (np_mem + PAGE(NODE_SIZE));
+	    // dp->stack = (void*) (np_mem + PAGE(NODE_SIZE));
 
 	    memset(np, 0, sizeof(node_t));
-	    np->flags      = flags;  // specific for node?
-	    np->delay      = delay;  // specific for node?
+	    np->flags      = g_flags;  // specific for node?
+	    np->delay      = delay;    // specific for node?
 	    np->up_fd      = -1;
 	    np->left_fd    = -1;
 	    np->down_fd    = -1;
@@ -828,11 +832,9 @@ int main(int argc, char** argv)
 	    np->read_ioreg  = f18_read_ioreg;
 	    np->write_ioreg = f18_write_ioreg;
 
-	    np_mem += (PAGE(NODE_SIZE)+PAGE(STACK_SIZE));
+	    np_mem += (PAGE(NODE_SIZE));
 	}
     }
-    // printf("np_mem size = %ld\n", np_mem - (uint8_t*) node_mem);
-
     // create all the socket pairs needed
     for (i = 0; i < v; i++) {
 	for (j = 0; j < h; j++) {
@@ -861,7 +863,14 @@ int main(int argc, char** argv)
 	for (j = 0; j < h; j++) {
 	    node_data_t* dp  = &node[i][j];
 	    pthread_attr_init(&dp->attr);
-	    pthread_attr_setstack(&dp->attr,&dp->stack,stack_size);
+	    pthread_attr_setstacksize(&dp->attr, PAGE(STACK_SIZE));
+	    if (g_flags & FLAG_VERBOSE) {
+		size_t size;
+		pthread_attr_getstacksize(&dp->attr, &size);
+		fprintf(stderr, "thread stack size: %ld\n", size);
+	    }
+	    VERBOSE(dp->np, "about to start node %p [%d,%d]\r\n",
+		    dp->np, dp->i, dp->j);
 	    if (pthread_create(&dp->thread,&dp->attr,f18_emu_start,(void*) dp) <0) {
 		perror("pthread_create"); 
 		exit(1);
