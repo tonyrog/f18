@@ -10,7 +10,7 @@ char* f18_ins_name[] = {
     "dup","pop","over","a",".","push","b!","a!"
 };
 
-// I do not think it matters in the emulator which way the posh and pop goes
+// I do not think it matters in the emulator which way the push and pop goes
 #define PUSH_ds(np,val) (np)->ds[(np)->sp++ & 0x7] = (val)
 #define POP_ds(np)      (np)->ds[--(np)->sp & 0x7]
 
@@ -148,8 +148,8 @@ static void write_mem(node_t* np, uint18_t addr, uint18_t val)
 	// np->rom[(addr-ROM_START) & 0x3f] = val;
     }
     else {
-	(*np->write_ioreg)(np, addr, val);
 	VERBOSE(np,"write ioreg[%04x] = %x\n", addr, val);
+	(*np->write_ioreg)(np, addr, val);
     }
 }
 

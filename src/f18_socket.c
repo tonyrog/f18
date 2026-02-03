@@ -20,6 +20,7 @@
 #include <pthread.h>
 
 #include "f18.h"
+#include "f18_scan.h"
 
 #ifndef SIGRETTYPE		/* allow override via Makefile */
 #define SIGRETTYPE void
@@ -48,60 +49,69 @@ typedef struct {
     node_t*  np;
     pthread_t thread;
     pthread_attr_t attr;
+    int up_fd;
+    int left_fd;
+    int down_fd;
+    int right_fd;
+
+    int tty_fd;
+    int stdin_fd;
+    int stdout_fd;    
 } node_data_t;
 
 node_data_t node[8][18];
 
-int select_ports(node_t* np, uint18_t ioreg, int is_input,
+int select_ports(node_data_t* dp, uint18_t ioreg, int is_input,
 		 int* fds, uint18_t* io_rd, uint18_t* io_wr)
 {
+
     if ((ioreg < IOREG_START) || (ioreg > IOREG_END))
 	return 0;
     if (io_rd) io_rd[0] = 0;
     if (io_wr) io_wr[0] = 0;
     switch(ioreg) {
     case IOREG_STDIO:
-	if ((fds[0] = is_input ? np->stdin_fd : np->stdout_fd) < 0)
+	if ((fds[0] = is_input ? dp->stdin_fd : dp->stdout_fd) < 0)
 	    return 0;
 	return 1;
     case IOREG_STDIN:
-	if (!is_input || (np->stdin_fd < 0))
+	if (!is_input || (dp->stdin_fd < 0))
 	    return 0;
-	fds[0] = np->stdin_fd;
+	fds[0] = dp->stdin_fd;
 	return 1;
     case IOREG_STDOUT:
-	if (is_input || (np->stdout_fd < 0))
+	if (is_input || (dp->stdout_fd < 0))
 	    return 0;
-	fds[0] = np->stdout_fd;
+	fds[0] = dp->stdout_fd;
 	return 1;
     case IOREG_TTY:
-	if (np->tty_fd < 0)
+	if (dp->tty_fd < 0)
 	    return 0;
-	fds[0] = np->tty_fd;
+	fds[0] = dp->tty_fd;
 	return 1;
     default: {
 	int i = 0;
 	if ((ioreg & F18_DIR_MASK) == F18_DIR_BITS) {
-	    if ((ioreg & F18_RIGHT_BIT) && (np->right_fd >= 0)) {
-		fds[i] = np->right_fd;
+	    if ((ioreg & F18_RIGHT_BIT) && (dp->right_fd >= 0)) {
+		fds[i] = dp->right_fd;
 		if (io_rd) io_rd[i] = F18_IO_RIGHT_RD;
 		if (io_wr) io_wr[i] = F18_IO_RIGHT_WR;
 		i++;
 	    }
-	    if (!(ioreg & F18_DOWN_BIT) && (np->down_fd >= 0)) {
-		fds[i] = np->down_fd;
+	    if (!(ioreg & F18_DOWN_BIT) && (dp->down_fd >= 0)) {
+		fds[i] = dp->down_fd;
 		if (io_rd) io_rd[i] = F18_IO_DOWN_RD;
 		if (io_wr) io_wr[i] = F18_IO_DOWN_WR;
 		i++;
 	    }
-	    if ((ioreg & F18_LEFT_BIT) && (np->left_fd >= 0)) {
-		fds[i] = np->left_fd;
+	    if ((ioreg & F18_LEFT_BIT) && (dp->left_fd >= 0)) {
+		fds[i] = dp->left_fd;
 		if (io_rd) io_rd[i] = F18_IO_LEFT_RD;
 		if (io_wr) io_wr[i] = F18_IO_LEFT_WR;
 		i++;
 	    }
-	    if (!(ioreg & F18_UP_BIT) && (np->up_fd >= 0)) {
-		fds[i] = np->up_fd;
+	    if (!(ioreg & F18_UP_BIT) && (dp->up_fd >= 0)) {
+		fds[i] = dp->up_fd;
 		if (io_rd) io_rd[i] = F18_IO_UP_RD;
 		if (io_wr) io_wr[i] = F18_IO_UP_WR;
 		i++;
@@ -112,14 +122,32 @@ int select_ports(node_t* np, uint18_t ioreg, int is_input,
     }
 }
 
+static int write_value(int fd, int is_bin, uint18_t value)
+{
+    if (is_bin)
+	return write(fd, &value, sizeof(value));
+    else {
+	char buf[8];
+	int  len;
+	len = snprintf(buf, sizeof(buf), "%05x\n", value);
+	if (len >= sizeof(buf)) {
+	    fprintf(stderr, "warning: output truncated\n");
+	    len = sizeof(buf)-1;
+	}
+	return write(fd, buf, len);
+    }
+}
+
+
 static void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
 {
     uint18_t io_wr[4];
     int fds[4];
     int nports;
     int i, r;
-
-    if ((nports = select_ports(np, ioreg, 0, fds, NULL, io_wr)) == 0) {
+    node_data_t* dp = np->user;
+    
+    if ((nports = select_ports(dp, ioreg, 0, fds, NULL, io_wr)) == 0) {
 	fprintf(stderr, "io error when writing ioreg=%x, not mapped\n", ioreg);
 	return;
     }
@@ -132,45 +160,23 @@ static void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     }
 
     for (i = 0; i < nports; i++) {
-	char buf[8];
-	int  len;
 	uint18_t dd = io_wr[i];
 	int fd = fds[i];
 
-	len = snprintf(buf, sizeof(buf), "%05x\n", value);
-	if (len >= sizeof(buf)) {
-	    fprintf(stderr, "warning: output truncated\n");
-	    len = sizeof(buf)-1;
-	}
-
 	switch(dd) {
 	case 0:
-	    r = write(fd, buf, len);
+	    r = write_value(fd, 0, value);
 	    break;
 	case F18_IO_RIGHT_WR:
-	    if (np->flags & FLAG_WR_BIN_RIGHT)
-		r = write(fd, &value, sizeof(value));
-	    else
-		r = write(fd, buf, len);
+	    r = write_value(fd, (np->flags & FLAG_WR_BIN_RIGHT), value);
 	    break;
 	case F18_IO_DOWN_WR:
-	    if (np->flags & FLAG_WR_BIN_DOWN)
-		r = write(fd, &value, sizeof(value));
-	    else
-		r = write(fd, buf, len);
+	    r = write_value(fd, (np->flags & FLAG_WR_BIN_DOWN), value);
 	    break;
 	case F18_IO_LEFT_WR:
-	    if (np->flags & FLAG_WR_BIN_LEFT)
-		r = write(fd, &value, sizeof(value));
-	    else
-		r = write(fd, buf, len);
-	    break;
+	    r = write_value(fd, (np->flags & FLAG_WR_BIN_LEFT), value);
 	case F18_IO_UP_WR:
-	    if (np->flags & FLAG_WR_BIN_UP)
-		r = write(fd, &value, sizeof(value));
-	    else
-		r = write(fd, buf, len);
-	    break;
+	    r = write_value(fd, (np->flags & FLAG_WR_BIN_UP), value);
 	default:
 	    break;
 	}
@@ -184,164 +190,6 @@ error:
 	    ioreg, strerror(errno));
 }
 
-
-
-int parse_mnemonic(char* word, int n)
-{
-    int i;
-    for (i=0; i<32; i++) {
-	int len = strlen(f18_ins_name[i]);
-	if ((n == len) && (memcmp(word, f18_ins_name[i], n) == 0))
-	    return i;
-    }
-    return -1;
-}
-
-struct {
-    char* name;
-    uint18_t value;
-} symbol[] =  {
-    { "stdio",   IOREG_STDIO },
-    { "stdin",   IOREG_STDIN },
-    { "stdout",  IOREG_STDOUT },
-    { "tty",     IOREG_TTY },
-
-    { "io",      IOREG_IO },
-    { "data",    IOREG_DATA },
-    { "---u",    IOREG____U },
-    { "--l-",    IOREG___L_ },
-    { "--lu",    IOREG___LU },
-    { "-d--",    IOREG__D__ },
-    { "-d--u",   IOREG__D_U },
-    { "-dl-",    IOREG__DL_ },
-    { "-dlu",    IOREG__DLU },
-    { "r---",    IOREG_R___ },
-    { "r--u",    IOREG_R__U },
-    { "r-l-",    IOREG_R_L_ },
-    { "r-lu",    IOREG_R_LU },
-    { "rd--",    IOREG_RD__ },
-    { "rd-u",    IOREG_RD_U },
-    { "rdl-",    IOREG_RDL_ },
-    { "rdlu",    IOREG_RDLU },
-    { NULL, 0 }
-};
-
-int parse_symbol(char** pptr, uint18_t* valuep)
-{
-    int i = 0;
-    char*ptr = *pptr;
-
-    while(symbol[i].name != NULL) {
-	int n = strlen(symbol[i].name);
-	if (strncmp(ptr, symbol[i].name, n) == 0) {
-	    if ((ptr[n] == '\0') || isblank(ptr[n])) {
-		*pptr = ptr + n;
-		*valuep = symbol[i].value;
-		return 1;
-	    }
-	}
-	i++;
-    }
-    return 0;
-}
-
-#define TOKEN_ERROR     -1
-#define TOKEN_EMPTY     0
-#define TOKEN_MNEMONIC1 1
-#define TOKEN_MNEMONIC2 2
-#define TOKEN_VALUE     3
-
-//
-// parse:
-//   
-//   ( '(' .* ')' )* <mnemonic>
-//   ( '(' .* ')' )* <mnemonic>':'<dest>
-//   ( '(' .* ')' )* <hex>
-//   ( '(' .* ')' )* \<blank> .*
-//
-
-int parse_ins(char** pptr, uint18_t* insp, uint18_t* dstp)
-{
-    char* ptr = *pptr;
-    char* word;
-    uint18_t value = 0;
-    int n = 0;
-    int ins;
-    int has_dest = 0;
-
-    while(isblank(*ptr) || (*ptr == '(')) {
-	while(isblank(*ptr)) ptr++;
-	if (*ptr == '(') {
-	    ptr++;
-	    while(*ptr && (*ptr != ')'))
-		ptr++;
-	    if (*ptr) ptr++;
-	}
-    }
-
-    if ( (*ptr == '\\') && (isblank(*(ptr+1)) || (*(ptr+1)=='\0')) ) {
-	while(*ptr != '\0') ptr++;  // skip rest
-    }
-    word = ptr;
-    // fprintf(stderr, "WORD [%s]", word);
-    while (*ptr && !isblank(*ptr) && (*ptr != ':')) { ptr++; n++; }
-    if (n == 0) return TOKEN_EMPTY;
-    // first check mnemonic
-    ins = parse_mnemonic(word, n);
-    // check reset is destination
-    switch(ins) {
-    case -1:
-	has_dest = 0;
-	ptr = word;
-	break;
-    case INS_PJUMP:
-    case INS_PCALL:
-    case INS_NEXT:
-    case INS_IF:
-    case INS_MINUS_IF:
-	if (*ptr == ':') { // force?
-	    has_dest = 1;
-	    ptr++;
-	}
-	break;
-    default:
-	has_dest = 0;
-	break;
-    }
-
-    // parse number or dest
-    if (parse_symbol(&ptr, &value))
-	n = 1;
-    else {
-	n = 0;
-	while(isxdigit(*ptr)) {
-	    value <<= 4;
-	    if ((*ptr >= '0') && (*ptr <= '9'))
-		value += (*ptr-'0');
-	    else if ((*ptr >= 'A') && (*ptr <= 'F'))
-		value += ((*ptr-'A')+10);
-	    else
-		value += ((*ptr-'a')+10);
-	    ptr++;
-	    n++;
-	}
-    }
-    *pptr = ptr;
-    if (ins >= 0) {
-	*insp = ins;
-	*dstp = value;
-	if (has_dest && (n > 0))
-	    return TOKEN_MNEMONIC2;
-	return TOKEN_MNEMONIC1;
-    }
-    if ((n == 0) || !(isblank(*ptr) || (*ptr=='\0'))  )
-	return TOKEN_ERROR;
-    *insp = value;
-    return TOKEN_VALUE;
-}
-
-
-
 static uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 {
     uint18_t io_rd[4];
@@ -350,22 +198,20 @@ static uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     int fd;
     fd_set readfds;
     int nfds;
-    char buf[256];
-    char* ptr;
-    uint18_t ins;
-    uint18_t insx;
-    uint18_t dest;
     uint18_t value;
     int nports;
     int i;
     int r;
+    node_data_t* dp = np->user;
+
+    VERBOSE(np, "read_ioreg %05x, dp=%p\n", ioreg, dp);
 
     if (ioreg == IOREG_IO) {
 	uint18_t io_wr[4];
 	fd_set writefds;
 	struct timeval tm = {0, 0};
 
-	if ((nports = select_ports(np, IOREG_RDLU, 1, fds, io_rd, io_wr))==0)
+	if ((nports = select_ports(dp, IOREG_RDLU, 1, fds, io_rd, io_wr))==0)
 	    return 0;
 	FD_ZERO(&readfds);
 	FD_ZERO(&writefds);
@@ -385,10 +231,11 @@ static uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	    if (!FD_ISSET(fds[i], &writefds)) // other side is reading
 		value |= io_rd[i];
 	}
+	// fixme: this value is not correct
 	return value;
     }
 
-    if ((nports = select_ports(np, ioreg, 1, fds, io_rd, NULL)) == 0) {
+    if ((nports = select_ports(dp, ioreg, 1, fds, io_rd, NULL)) == 0) {
 	fprintf(stderr, "io error when writing ioreg=%x, not mapped\n", ioreg);
 	return 0;
     }
@@ -426,8 +273,6 @@ static uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     return 0;
 
 again:
-    // read line from fd until '\n' is found or buffer overflow
-    // VERBOSE(np,"read line fd=%d\n", fd);
     if ((fd == 0) && (np->flags & FLAG_TERMINATE))
 	return 0;
 
@@ -447,74 +292,20 @@ again:
 	}
     }
 
-    // Interpreter mode channel
-    i = 0;
-    while(i < (sizeof(buf)-1)) {
-	r = read(fd, &buf[i], 1);
-	if (r == 0) {  // input stream has closed
-	    if (fd == 0)  // it was stdin !
-		np->flags |= FLAG_TERMINATE;  // lets terminate
-	    break;
+    r = scan_line(fd, &value);
+    VERBOSE(np,"read line fd=%d, r=%d, value=%05x\n", fd, r, value);
+    
+    if (r < 0) {
+	if (r == -2) {
+	    np->flags |= FLAG_TERMINATE;
+	    return 0;
 	}
-	else if (r < 0)
-	    goto error;
-	else if (buf[i] == '\n')
-	    break;
-	i++;
+	if (r == -3) {
+	    return 0;
+	}
+	goto error;
     }
-    buf[i] = '\0';
-    VERBOSE(np,"read fd=%d [%s]\n", fd, buf);
-    ptr = buf;
-    i = parse_ins(&ptr, &insx, &dest);
-    switch(i) {
-    case TOKEN_EMPTY: goto again;
-    case TOKEN_MNEMONIC1: ins = (insx << 13); break;
-    case TOKEN_MNEMONIC2:
-	// instruction part is encoded (^IMASK) but dest is not (why)
-	ins = (insx << 13) ^ IMASK;                // encode instruction
-	ins = (ins & ~MASK10) | (dest & MASK10);  // set address bits
-	return ins;
-    case  TOKEN_VALUE:
-	return (insx & MASK18);  // value not encoded
-    default: goto error;
-    }
-    i = parse_ins(&ptr, &insx, &dest);
-    switch(i) {
-    case TOKEN_EMPTY: // assume rest of opcode are nops (warn?)
-	ins = (ins | (INS_NOP<<8) | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
-	return ins;
-    case TOKEN_MNEMONIC1: ins |= (insx  << 8); break;
-    case TOKEN_MNEMONIC2:
-	ins = (ins | (insx << 8)) ^ IMASK;      // encode instruction
-	ins = (ins & ~MASK8) | (dest & MASK8);  // set address bits
-	return ins;
-    default: goto error;
-    }
-    i = parse_ins(&ptr, &insx, &dest);
-    switch(i) {
-    case TOKEN_EMPTY:
-	ins = (ins | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
-	return ins;
-    case TOKEN_MNEMONIC1: ins |= (insx << 3); break;
-    case TOKEN_MNEMONIC2:
-	ins = (ins | (insx << 3)) ^ IMASK;      // encode instruction
-	ins = (ins & ~MASK3) | (dest & MASK3);  // set address bits
-	return ins;
-    default: goto error;
-    }
-    i = parse_ins(&ptr, &insx, &dest);
-    switch(i) {
-    case TOKEN_EMPTY:
-	ins = (ins | (INS_NOP>>2)) ^ IMASK;
-	return ins;
-    case TOKEN_MNEMONIC1:
-	if ((insx & 3) != 0)
-	    fprintf(stderr, "scan error: bad slot3 instruction used %s\n",
-		    f18_ins_name[insx]);
-	ins = (ins | (insx >> 2)) ^ IMASK; // add op and encode
-	return ins;
-    default: goto error;
-    }
+    return value;
 
 error:
     fprintf(stderr, "io error when reading ioreg=%x, error=%s\n",
@@ -639,9 +430,12 @@ void usage(char* prog)
     fprintf(stderr, " options:\n"
 	    "    -v               Enable verbose   (if debug compiled)\n"
 	    "    -t               Enable trace     (if debug compiled)\n"
-	    "    -D regs,ram,r,s  Dump registers,ram,return-stack,data-stack\n"
-	    "    -d <delay>  Set delay between instructions (in usecs)\n"
-	    "    -l VxH      Set processor mesh layout (max 8x18)\n");
+	    "    -i               Interactive\n"	    
+	    "    -D reg,ram,rs,ds Dump registers,ram,return-stack,data-stack\n"
+	    "    -d <delay>       Set delay between instructions (in usecs)\n"
+	    "    -l VxH           Set processor mesh layout (max 8x18)\n"
+	    "    -f input-file    Read interpreted stream\n"	    
+	);
     exit(1);
 }
 
@@ -649,22 +443,24 @@ void* f18_emu_start(void *arg)
 {
     node_data_t* dp = (node_data_t*) arg;
     
-    VERBOSE(dp->np, "node %p [%d,%d] started\r\n", dp->np, dp->i, dp->j);
+    VERBOSE(dp->np, "node [%d,%d] started\r\n", dp->i, dp->j);
     f18_emu(dp->np);
+    VERBOSE(dp->np, "node [%d,%d] stopped\r\n", dp->i, dp->j);
     return NULL;
 }
 
 //
 //  Start F18 emulator
-//  -v verbose   (if debug compiled)
-//  -t trace     (if debug comipled)
-//  -d delay     Set delay between instructions
-//  -l VxH       processor layout (max 8x18)
+//  -v               Verbose       (if debug compiled)
+//  -t               Trace         (if debug comipled)
+//  -i               Interactive
+//  -D reg,ram,rs,ds Dump registers,ram,return-stack,data-stack
+//  -d delay         Set delay between instructions
+//  -l VxH           processor layout (max 8x18)
 //
 
 int main(int argc, char** argv)
 {
-    node_t n;
     int fd;
     int c;
     int i,j;
@@ -674,12 +470,22 @@ int main(int argc, char** argv)
     void* node_mem;
     uint8_t* np_mem;
     size_t alloc_size;
-
+    int interactive = 0;
+    char* filename = NULL;
+    int file_fd = -1;
+    void* status = 0;
+    
     g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
     g_flags = 0;
     
-    while((c=getopt(argc, argv, "vtl:d:D:")) != -1) {
+    while((c=getopt(argc, argv, "ivtl:d:D:f:")) != -1) {
 	switch(c) {
+	case 'i':
+	    interactive = 1;
+	    break;
+	case 'f':
+	    filename = optarg;
+	    break;
 	case 'v':
 	    g_flags |= FLAG_VERBOSE;
 	    break;
@@ -746,15 +552,24 @@ int main(int argc, char** argv)
     argc -= optind;
     argv += optind;
 
-    if ((fd = open("/dev/tty", O_RDWR)) < 0) {
-	fprintf(stderr, "unabled to open tty, error=%s\n",
-		strerror(errno));
-	exit(1);
+    if (interactive) {
+	if ((fd = open("/dev/tty", O_RDWR)) < 0) {
+	    fprintf(stderr, "unabled to open tty, error=%s\n",
+		    strerror(errno));
+	    exit(1);
+	}
+	if (tty_init(fd) < 0) {
+	    fprintf(stderr, "unabled to setup tty, error=%s\n",
+		    strerror(errno));
+	    exit(1);
+	}
     }
-    if (tty_init(fd) < 0) {
-	fprintf(stderr, "unabled to setup tty, error=%s\n",
-		strerror(errno));
-	exit(1);
+    if (filename != NULL) {
+	if ((file_fd = open(filename, O_RDONLY)) < 0) {
+	    fprintf(stderr, "unabled to open file %s, error=%s\n",
+		    filename, strerror(errno));
+	    exit(1);
+	}
     }
 
     if (opt_layout) {
@@ -812,23 +627,29 @@ int main(int argc, char** argv)
 	    dp->i     = i;
 	    dp->j     = j;
 	    dp->np    = np;
+	    dp->up_fd      = -1;
+	    dp->left_fd    = -1;
+	    dp->down_fd    = -1;
+	    dp->right_fd   = -1;
+	    dp->tty_fd     = tty_fd;
+	    dp->stdin_fd   = (file_fd >= 0) ? file_fd : 0;
+	    dp->stdout_fd  = 1;
+	    
 	    // dp->stack = (void*) (np_mem + PAGE(NODE_SIZE));
 
 	    memset(np, 0, sizeof(node_t));
+	    np->io = IMASK;
+	    np->id = (i<<5)|(j);	    
 	    np->flags      = g_flags;  // specific for node?
 	    np->delay      = delay;    // specific for node?
-	    np->up_fd      = -1;
-	    np->left_fd    = -1;
-	    np->down_fd    = -1;
-	    np->right_fd   = -1;
-	    np->tty_fd     = tty_fd;
-	    np->stdin_fd   = 0;
-	    np->stdout_fd  = 1;
-	    if ((i == 0) && (j == 0))
+	    
+	    if ((i == 0) && (j == 0)) {
 		np->p = IOREG_STDIO;
+	    }
 	    else
 		np->p = IOREG_RDLU;
 	    np->b = IOREG_TTY;
+	    np->user = dp;	    
 	    np->read_ioreg  = f18_read_ioreg;
 	    np->write_ioreg = f18_write_ioreg;
 
@@ -844,8 +665,8 @@ int main(int argc, char** argv)
 		    perror("socketpair lr");
 		    exit(1);
 		}
-		node[i][j-1].np->right_fd = lr[0];
-		node[i][j].np->left_fd = lr[1];
+		node[i][j-1].right_fd = lr[0];
+		node[i][j].left_fd = lr[1];
 	    }
 	    if (i > 0) {  // create up/down
 		int ud[2];
@@ -853,8 +674,8 @@ int main(int argc, char** argv)
 		    perror("socketpair ud");
 		    exit(1);
 		}
-		node[i-1][j].np->down_fd = ud[0];
-		node[i][j].np->up_fd = ud[1];
+		node[i-1][j].down_fd = ud[0];
+		node[i][j].up_fd = ud[1];
 	    }
 	}
     }
@@ -878,10 +699,13 @@ int main(int argc, char** argv)
 	}
     }
 
-    while(1) {
+    pthread_join(node[0][0].thread, &status);
+
+    // while(1) {
 	// printf("Z\n");
-	sleep(10);
-    }
-    tty_reset(tty_fd); // atexit?
+    //  sleep(10);
+    // }
+    if (tty_fd >= 0)
+	tty_reset(tty_fd); // atexit?
     exit(0);
 }

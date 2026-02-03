@@ -68,7 +68,7 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define IOREG_TTY     0x103  // test/debug
 
 #define IOREG_IO      0x15D  // i/o control and status
-#define IOREG_DATA    0x141
+#define IOREG_DATA    0x141  // up-port without handshake
 #define IOREG____U    0x145  // up
 #define IOREG___L_    0x175  // left
 #define IOREG___LU    0x165  // left or up
@@ -89,9 +89,9 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define F18_DIR_BITS      0x105  // Direction pattern
 #define F18_DIR_MASK      0x10F  // Direction pattern
 #define F18_RIGHT_BIT     0x080  // right when 1
-#define F18_DOWN_BIT      0x040  // down when 0
-#define F18_LEFT_BIT      0x020  // left when 1
-#define F18_UP_BIT        0x010  // up when 0
+#define F18_DOWN_BIT      0x040  // down when  0
+#define F18_LEFT_BIT      0x020  // left when  1
+#define F18_UP_BIT        0x010  // up when    0
 
 #define F18_IO_PIN17      0x20000
 // port status bits in io register
@@ -107,6 +107,16 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define F18_IO_PIN5       0x00020
 #define F18_IO_PIN3       0x00008
 #define F18_IO_PIN1       0x00002
+
+
+#define RIGHT 3
+#define DOWN  2
+#define LEFT  1
+#define UP    0
+#define DIR_BIT(n)     (1 << (n))            // RDLU => 1,2,4,8
+#define F18_DIR_BIT(n) (DIR_BIT((n)) << 8)   // RDLU => F18_<dir>_BIT
+#define F18_IO_DIR_WR(n) ((1<<(2*(n)))<<9)   // RDLU => F18_IO_<dir>_WR
+#define F18_IO_DIR_RD(n) ((1<<(2*(n)+1))<<9) // RDLU => F18_IO_<dir>_RD
 
 #define P9          0x200    // P9 bit
 #define SIGN_BIT    0x20000  // 18 bit sign bit
@@ -136,6 +146,8 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define FLAG_WR_BIN_DOWN  0x02000
 #define FLAG_WR_BIN_UP    0x01000
 
+#define ID_TO_ROW(id)    ((id)>>5)
+#define ID_TO_COLUMN(id) ((id) & 0x1f)
 //
 // sizeof(node_t) = 652 bytes (update me now and then)
 // total ram usage for threads 93888 bytes.
@@ -144,22 +156,13 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 typedef struct _node_t {
     uint18_t       ram[64];
     const uint18_t rom[64];
-    uint18_t       io;       // io status register (read)
-
+    uint18_t       io;      // io status register (read/write)
+    uint18_t       id;      // id r:3,col:5
     useconds_t delay;       // delay between instructions
     uint18_t flags;         // flags,debug,trace...
 
-    // FILE/PIPE/SOCKETS
-    int up_fd;
-    int left_fd;
-    int down_fd;
-    int right_fd;
-
-    int tty_fd;
-    int stdin_fd;
-    int stdout_fd;
-
     // System dependent functions
+    void* user;  // user data pointer
     uint18_t (*read_ioreg)(struct _node_t* np, uint18_t reg);
     void     (*write_ioreg)(struct _node_t* np, uint18_t reg, uint18_t val);
 
@@ -187,7 +190,7 @@ typedef struct _node_t {
     } while(0)
 #define TRACE(np,fmt, ...) do {				\
 	if ((np)->flags & FLAG_TRACE)				\
-	    fprintf(stdout, fmt, __VA_ARGS__);		\
+	    fprintf(stdout, "[%d,%d]: "fmt, ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), __VA_ARGS__); \
     } while(0)
 #define DELAY(np) do {				\
 	if ((np)->delay)			\
@@ -198,8 +201,6 @@ typedef struct _node_t {
 #define TRACE(np,fmt, ...)
 #define DELAY(np)
 #endif
-
-extern char* f18_ins_name[];
 
 extern void     f18_emu(node_t* p);
 
