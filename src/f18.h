@@ -146,10 +146,11 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define FLAG_WR_BIN_DOWN  0x02000
 #define FLAG_WR_BIN_UP    0x01000
 
+#define MAKE_ID(i,j)     ((((i)&0x7) << 5)|((j)&0x1f))
 #define ID_TO_ROW(id)    ((id)>>5)
 #define ID_TO_COLUMN(id) ((id) & 0x1f)
 //
-// sizeof(node_t) = 652 bytes (update me now and then)
+// sizeof(node_t) = 656 bytes (update me now and then)
 // total ram usage for threads 93888 bytes.
 // with page size of 4096*144 =  589824 bytes
 //
@@ -176,25 +177,25 @@ typedef struct _node_t {
     uint3_t  rp;           // return stack pointer
 
     uint18_t  i;           // instruction register
-    uint10_t  p;           // program counter
     uint18_t  a;           // address register
-    uint9_t   b;           //
+    uint10_t  p;           // program counter
+    uint9_t   b;           // write only register = io after reset
     uint8_t   c;           // carry flag
 } node_t;
 
 
 #ifdef DEBUG
 #define VERBOSE(np,fmt,...) do {			\
-	if ((np)->flags & FLAG_VERBOSE)			\
+	if (((node_t*)(np))->flags & FLAG_VERBOSE)	\
 	    fprintf(stdout, fmt, __VA_ARGS__);		\
     } while(0)
 #define TRACE(np,fmt, ...) do {				\
-	if ((np)->flags & FLAG_TRACE)				\
+	if (((node_t*)(np))->flags & FLAG_TRACE)			\
 	    fprintf(stdout, "[%d,%d]: "fmt, ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), __VA_ARGS__); \
     } while(0)
-#define DELAY(np) do {				\
-	if ((np)->delay)			\
-	    usleep((np)->delay);		\
+#define DELAY(np) do {					\
+	if (((node_t*)(np))->delay)			\
+	    usleep(((node_t*)(np))->delay);		\
     } while(0)
 #else
 #define VERBOSE(np,fmt, ...)
