@@ -205,4 +205,12 @@ typedef struct _node_t {
 
 extern void     f18_emu(node_t* p);
 
+// System thread state tracking
+extern void sys_thread_started(void);
+extern void sys_thread_terminated(void);
+extern void sys_enter_blocked_port(void);
+extern void sys_leave_blocked_port(void);
+extern void sys_enter_blocked_ext(void);
+extern void sys_leave_blocked_ext(void);
+
 #endif

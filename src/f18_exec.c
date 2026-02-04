@@ -14,6 +14,7 @@
 #include <termios.h>
 #include <libgen.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <pthread.h>
 
 #include "f18.h"
@@ -43,6 +44,62 @@ static struct termios tty_smode;
 static struct termios tty_rmode;
 static size_t  g_page_size = 0;
 static uint18_t g_flags = 0;
+static uint32_t g_v = 1, g_h = 1;
+
+// System thread state tracking (atomics for counters, mutex/cond for wait)
+static _Atomic int num_active = 0;
+static _Atomic int num_blocked_port = 0;
+static _Atomic int num_blocked_ext = 0;
+static _Atomic int num_terminated = 0;
+static pthread_mutex_t sys_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  sys_cond = PTHREAD_COND_INITIALIZER;
+
+static void check_done(void)
+{
+    if (num_active == 0 && num_blocked_ext == 0) {
+	pthread_mutex_lock(&sys_lock);
+	pthread_cond_signal(&sys_cond);
+	pthread_mutex_unlock(&sys_lock);
+    }
+}
+
+void sys_thread_started(void)
+{
+    // num_active is pre-set in main() before thread creation
+}
+
+void sys_thread_terminated(void)
+{
+    num_active--;
+    num_terminated++;
+    check_done();
+}
+
+void sys_enter_blocked_port(void)
+{
+    num_blocked_port++;
+    num_active--;
+    check_done();
+}
+
+void sys_leave_blocked_port(void)
+{
+    num_active++;
+    num_blocked_port--;
+}
+
+void sys_enter_blocked_ext(void)
+{
+    num_blocked_ext++;
+    num_active--;
+}
+
+void sys_leave_blocked_ext(void)
+{
+    num_active++;
+    num_blocked_ext--;
+    check_done();
+}
 
 static SIGRETTYPE ctl_c(int);
 static SIGRETTYPE suspend(int);
@@ -177,12 +234,14 @@ void usage(char* prog)
 void* f18_emu_start(void *arg)
 {
     node_t* np = (node_t*) arg;
-    
+
+    sys_thread_started();
     VERBOSE(np, "node [%d,%d] started\r\n",
 	    ID_TO_ROW(np->id), ID_TO_COLUMN(np->id));
     f18_emu(np);
     VERBOSE(np, "node [%d,%d] stopped\r\n",
 	    ID_TO_ROW(np->id), ID_TO_COLUMN(np->id));
+    sys_thread_terminated();
     return NULL;
 }
 
@@ -211,8 +270,6 @@ int main(int argc, char** argv)
     int interactive = 0;
     char* filename = NULL;
     int file_fd = -1;
-    void* status = 0;
-    
     g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
     g_flags = 0;
     
@@ -329,6 +386,8 @@ int main(int argc, char** argv)
 	    usage(basename(argv[0]));
     }
 
+    g_v = v;
+    g_h = h;
     alloc_size = v*h*(PAGE(NODE_SIZE));
     if (g_flags & FLAG_VERBOSE) {
 	fprintf(stderr, "page size %ld\n", g_page_size);
@@ -390,6 +449,10 @@ int main(int argc, char** argv)
 	}
     }
 
+    // Set num_active before creating threads to avoid race where main
+    // thread checks the termination condition before threads have started
+    num_active = v * h;
+
     for (i=0; i < v; i++) {
 	for (j = 0; j < h; j++) {
 	    reg_node_t* np = (reg_node_t*) node[i][j];
@@ -410,16 +473,31 @@ int main(int argc, char** argv)
 	}
     }
 
-    // fixme: use correct node as terminal node
-    pthread_join(((reg_node_t*)node[0][0])->thread, &status);
+    // Wait until no threads are active and none are waiting on external I/O
+    pthread_mutex_lock(&sys_lock);
+    while (num_active > 0 || num_blocked_ext > 0)
+	pthread_cond_wait(&sys_cond, &sys_lock);
+    pthread_mutex_unlock(&sys_lock);
 
-    // fixme wait for condition running == 0 
+    // Signal all nodes to terminate and wake blocked threads
+    for (i = 0; i < (int)g_v; i++) {
+	for (j = 0; j < (int)g_h; j++) {
+	    reg_node_t* np = (reg_node_t*) node[i][j];
+	    np->n.flags |= FLAG_TERMINATE;
+#ifdef MUTEX_IMPL
+	    pthread_mutex_lock(&np->lock);
+	    pthread_cond_broadcast(&np->cond);
+	    pthread_mutex_unlock(&np->lock);
+#endif
+	}
+    }
 
-    // while(1) {
-	// printf("Z\n");
-    //  sleep(10);
-    // }
+    // Join all threads
+    for (i = 0; i < (int)g_v; i++)
+	for (j = 0; j < (int)g_h; j++)
+	    pthread_join(((reg_node_t*)node[i][j])->thread, NULL);
+
     if (tty_fd >= 0)
-	tty_reset(tty_fd); // atexit?
+	tty_reset(tty_fd);
     exit(0);
 }

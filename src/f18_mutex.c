@@ -21,7 +21,7 @@
 
 #include "f18.h"
 #include "f18_scan.h"
-#include "f18_node_data.h"
+#include "f18_node.h"
 
 extern node_t* node[8][18];
 
@@ -187,11 +187,13 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     }
 
     // Phase 3: wait for a reader to find us and complete the transfer
+    sys_enter_blocked_port();
     pthread_mutex_lock(&dp->lock);
-    while (!dp->completed)
+    while (!dp->completed && !(np->flags & FLAG_TERMINATE))
 	pthread_cond_wait(&dp->cond, &dp->lock);
     dp->wmask = 0;
     pthread_mutex_unlock(&dp->lock);
+    sys_leave_blocked_port();
 }
 
 
@@ -212,14 +214,20 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	(ioreg == IOREG_STDIN) ||
 	(ioreg == IOREG_TTY)) {
 	if ((ioreg == IOREG_TTY) && (dp->tty_fd >= 0)) {
-	    if ((r = scan_line(dp->tty_fd, &value)) < 0) {
+	    sys_enter_blocked_ext();
+	    r = scan_line(dp->tty_fd, &value);
+	    sys_leave_blocked_ext();
+	    if (r < 0) {
 		fprintf(stderr, "io error when reading tty=%x\n", ioreg);
 		return 0;
 	    }
 	    return value;
 	}
 	else if (dp->stdin_fd >= 0) {
-	    if ((r = scan_line(dp->stdin_fd, &value)) < 0) {
+	    sys_enter_blocked_ext();
+	    r = scan_line(dp->stdin_fd, &value);
+	    sys_leave_blocked_ext();
+	    if (r < 0) {
 		VERBOSE(np, "io error reading %05x r = %d\n", ioreg, r);
 		if ((r == -2) || (r == -3)) {
 		    np->flags |= FLAG_TERMINATE;
@@ -234,9 +242,26 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	    return 0;
     }
 
+    if (ioreg == IOREG_IO) {
+	uint18_t status = 0;
+	dirs = select_dirs(np, IOREG_RDLU);
+	for (dir = 0; dir < 4; dir++) {
+	    if (!(dirs & DIR_BIT(dir))) continue;
+	    reg_node_t* rp = (reg_node_t*) get_remote(np, dir);
+	    uint18_t idir = invert_dir[dir];
+	    pthread_mutex_lock(&rp->lock);
+	    if (rp->wmask & DIR_BIT(idir))    // neighbor is writing to us
+		status |= F18_IO_DIR_WR(dir);  // Xw=1 (active high)
+	    if (!(rp->rmask & DIR_BIT(idir))) // neighbor is NOT reading from us
+		status |= F18_IO_DIR_RD(dir);  // Xr-=1 (idle)
+	    pthread_mutex_unlock(&rp->lock);
+	}
+	return status;
+    }
+
     dirs = select_dirs(np, ioreg);
     if (dirs == 0) {
-	fprintf(stderr, "[%d,%d]: io error when reading ioreg=%x, no directions\n", ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), ioreg);	
+	fprintf(stderr, "[%d,%d]: io error when reading ioreg=%x, no directions\n", ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), ioreg);
 	return 0;
     }
 
@@ -288,11 +313,15 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     }
 
     // Phase 3: wait for a writer to find us and complete the transfer
+    sys_enter_blocked_port();
     pthread_mutex_lock(&dp->lock);
-    while (!dp->completed)
+    while (!dp->completed && !(np->flags & FLAG_TERMINATE))
 	pthread_cond_wait(&dp->cond, &dp->lock);
-    value = dp->data;  // writer stored value here for us
+    value = dp->data;
     dp->rmask = 0;
     pthread_mutex_unlock(&dp->lock);
+    sys_leave_blocked_port();
+    if (np->flags & FLAG_TERMINATE)
+	return 0;
     return value;
 }

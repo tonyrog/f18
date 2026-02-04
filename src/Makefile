@@ -1,8 +1,8 @@
-#IOREG_OBJ = f18_mutex.o
-IOREG_OBJ = f18_socket.o
+IOREG_OBJ = f18_mutex.o
+#IOREG_OBJ = f18_socket.o
 OBJS = f18_emu.o $(IOREG_OBJ) f18_exec.o f18_scan.o
-#CFLAGS = -g -DDEBUG -Wall -DMUTEX_IMPL
-CFLAGS = -g -DDEBUG -Wall -DSOCKET_IMPL
+CFLAGS = -g -DDEBUG -Wall -DMUTEX_IMPL
+#CFLAGS = -g -DDEBUG -Wall -DSOCKET_IMPL
 LDFLAGS = -g -lpthread
 
 ../bin/f18: $(OBJS)
@@ -22,3 +22,6 @@ f18_mutex.o:	f18_mutex.c f18.h f18_node.h
 
 f18_socket.o:	f18_socket.c f18.h f18_node.h
 	$(CC) $(CFLAGS) -c f18_socket.c
+
+clean:
+	rm -f $(OBJS) ../bin/f18
