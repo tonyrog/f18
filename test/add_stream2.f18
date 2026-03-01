@@ -17,7 +17,7 @@
 ( 0006 ) @ dup push  . ( get data length to return stack )
 ( 0007 ) !b . . .      ( send a copy of length )
 
-( 0008 ) dup dup or .    ( push 1 on to the data stack )
+( 0008 ) dup dup xor .   ( push 1 on to the data stack )
 ( 0009 ) dup @ + .       ( add 1 to data )
 ( 000a ) !b . . .        ( write to output )
 ( 000b ) next:0008       ( loop over data length )

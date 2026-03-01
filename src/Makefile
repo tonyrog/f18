@@ -1,27 +1,34 @@
-IOREG_OBJ = f18_mutex.o
-#IOREG_OBJ = f18_socket.o
-OBJS = f18_emu.o $(IOREG_OBJ) f18_exec.o f18_scan.o
-CFLAGS = -g -DDEBUG -Wall -DMUTEX_IMPL
-#CFLAGS = -g -DDEBUG -Wall -DSOCKET_IMPL
+APP=$(shell basename `cd ..; pwd`)
+ERLC=$(shell which erlc)
+ERLC_FLAGS=-MMD -MF .$<.d -I ../.. +debug_info
+ERL_SOURCES=$(wildcard *.erl) $(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
+ERL_OBJECTS=$(ERL_SOURCES:%.erl=%.beam)
+ALL_OBJECTS=$(ERL_OBJECTS)
+ERL_MODULES=$(ERL_SOURCES:%.erl=%)
+comma=,
+empty=
+space = $(empty) $(empty)
+MODULES=$(subst $(space),$(comma),$(ERL_MODULES))
+VERSION=$(shell git describe --always --tags)
+
+OBJS = f18_emu.o f18_channel.o f18_exec.o f18_scan.o f18_rom.o f18_dis.o f18_config.o f18_pty.o
+CFLAGS = -MMD -MF .$<.d  -g -DDEBUG -Wall 
 LDFLAGS = -g -lpthread
+
+.PRECIOUS: $(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
+
+all:  $(ALL_OBJECTS) ../bin/f18
 
 ../bin/f18: $(OBJS)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
-f18_exec.o:	f18_exec.c f18.h f18_node.h
-	$(CC) $(CFLAGS) -c f18_exec.c
+%.o:	%.c
+	$(CC) $(CFLAGS) -c $<
 
-f18_emu.o:	f18_emu.c f18.h f18_node.h
-	$(CC) $(CFLAGS) -c f18_emu.c
-
-f18_scan.o:	f18_scan.c f18.h f18_scan.h
-	$(CC) $(CFLAGS) -c f18_scan.c
-
-f18_mutex.o:	f18_mutex.c f18.h f18_node.h
-	$(CC) $(CFLAGS) -c f18_mutex.c
-
-f18_socket.o:	f18_socket.c f18.h f18_node.h
-	$(CC) $(CFLAGS) -c f18_socket.c
+%.beam: %.erl
+	$(ERLC) $(ERLC_FLAGS) $<
 
 clean:
 	rm -f $(OBJS) ../bin/f18
+
+-include .*.d

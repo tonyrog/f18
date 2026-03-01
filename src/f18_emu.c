@@ -3,38 +3,42 @@
 //
 #include "f18.h"
 
-char* f18_ins_name[] = {
-    ";", "ex", "jump", "call", "unext", "next", "if", "-if",
-    "@p", "@+", "@b", "@", "!p", "!+", "!b", "!",
-    "+*","2*","2/","-","+","and","or", "drop",
-    "dup","pop","over","a",".","push","b!","a!"
+const char* f18_ins_name[32] = {
+    ";",     "ex",   "jump", "call",
+    "unext", "next", "if",   "-if",
+    "@p",    "@+",   "@b",   "@",
+    "!p",    "!+",   "!b",   "!",
+    "+*",    "2*",   "2/",   "inv",
+    "+",     "and",  "xor",   "drop",
+    "dup",   "r>",  "over", "a",
+    ".",     ">r", "b!",   "a!"
 };
 
 // I do not think it matters in the emulator which way the push and pop goes
-#define PUSH_ds(np,val) (np)->ds[(np)->sp++ & 0x7] = (val)
-#define POP_ds(np)      (np)->ds[--(np)->sp & 0x7]
+#define PUSH_ds(np,val) (np)->ds[SP++ & 0x7] = (val)
+#define POP_ds(np)      (np)->ds[--SP & 0x7]
 
-#define PUSH_s(np, val) do { 			\
-    PUSH_ds((np), (np)->s);			\
-    (np)->s = (np)->t;				\
-    (np)->t = (val);				\
+#define PUSH_s(np, val) do {		\
+	PUSH_ds((np), S);		\
+	S = T;				\
+	T = (val);			\
     } while(0)
 
-#define POP_s(np) do {				\
-    (np)->t = (np)->s;				\
-    (np)->s = POP_ds(np);			\
+#define POP_s(np) do {		\
+	T = S;			\
+	S = POP_ds(np);		\
     } while(0)
 
-#define PUSH_rs(np,val) (np)->rs[(np)->rp++ & 0x7] = (val)
-#define POP_rs(np)      (np)->rs[--(np)->rp & 0x7]
+#define PUSH_rs(np,val) (np)->rs[RP++ & 0x7] = (val)
+#define POP_rs(np)      (np)->rs[--RP & 0x7]
 
-#define PUSH_r(np, val) do { 			\
-    PUSH_rs((np), (np)->r);			\
-    (np)->r = (val);				\
+#define PUSH_r(np, val) do {			\
+	PUSH_rs((np), R);			\
+	R = (val);				\
     } while(0)
 
-#define POP_r(np) do {				\
-    (np)->r = POP_rs(np);			\
+#define POP_r(np) do {			\
+	R = POP_rs(np);			\
     } while(0)
 
 #define swap18(a,b) do {			\
@@ -43,89 +47,116 @@ char* f18_ins_name[] = {
     (b) = _swap18_t1;				\
     } while(0)
 
-#ifdef DEBUG
-#define DUMP(np) do {					\
-    if ((np)->flags & FLAG_DUMP_REG) dump_reg((np));	\
-    if ((np)->flags & FLAG_DUMP_DS)  dump_ds((np));	\
-    if ((np)->flags & FLAG_DUMP_RS)  dump_rs((np));	\
-    if ((np)->flags & FLAG_DUMP_RAM) dump_ram((np));	\
+#define p_inc() do {						       \
+	if ((P0 >= RAM_START) && (P0<= RAM_END2))		       \
+	    P = ((P0 + 1) & MASK7) | (P & P9);			       \
+	else if ((P0 >= ROM_START) && (P0 <= ROM_END2))		       \
+	    P = (ROM_START + (((P0 - ROM_START) + 1) & MASK7)) | (P & P9); \
     } while(0)
-#else
-#define DUMP(np)
-#endif
 
+#define a_inc() do {				\
+    if ((A0 >= RAM_START) && (A0 <= RAM_END2))	\
+	A = ((A0 + 1) & MASK7);				\
+    else if ((A0 >= ROM_START) && (A0 <= ROM_END2))		\
+	A = (ROM_START + (((A0 - ROM_START) + 1) & MASK7));	\
+    } while(0)
 
+#define SWAP_IN(np) do {			\
+	T = np->reg.t;				\
+	S = np->reg.s;				\
+	SP = np->reg.sp;				\
+	R  = np->reg.r;				\
+	RP = np->reg.rp;				\
+	P  = np->reg.p;				\
+	I  = np->reg.i;				\
+	A  = np->reg.a;				\
+	B  = np->reg.b;				\
+	C  = np->reg.c;				\
+    } while(0)
+
+#define SWAP_OUT(np) do {			\
+	np->reg.t = T;				\
+	np->reg.s = S;				\
+	np->reg.sp = SP;				\
+	np->reg.r  = R;				\
+	np->reg.rp = RP;				\
+	np->reg.p  = P;			\
+	np->reg.i = I;				\
+	np->reg.a = A;				\
+	np->reg.b = B;				\
+	np->reg.c = C;				\
+    } while(0)
+
+static uint18_t read_mem(node_t* np, uint18_t addr);
 
 static void dump_ram(node_t* np)
 {
-    int i;
-    for (i = RAM_START; i<=RAM_END; i++)
-	fprintf(stdout, "ram[%d]=%05x\n", i, np->ram[i]);
+    f18_disasm(np->ram, NULL, RAM_START, 64);
+}
+
+static void dump_rom(node_t* np)
+{
+    int i = ID_TO_ROW(np->id);
+    int j = ID_TO_COLUMN(np->id);
+    f18_disasm(np->rom, SymMap[i][j], ROM_START, 64);
 }
 
 static void dump_ds(node_t* np)
 {
     int i;
-    fprintf(stdout, "t=%05x,s=%05x",np->t,np->s);
+    fprintf(stdout, "t=%05x,s=%05x",np->reg.t,np->reg.s);
     for (i=0; i<8; i++)
-	fprintf(stdout, ",%05x", np->ds[(np->sp+i-1)&0x7]);
+	fprintf(stdout, ",%05x", np->ds[(np->reg.sp+i-1)&0x7]);
     fprintf(stdout, "\n");
 }
-
 
 static void dump_rs(node_t* np)
 {
     int i;
-    fprintf(stdout, "r=%05x",np->r);
+    fprintf(stdout, "r=%05x",np->reg.r);
     for (i=0; i<8; i++)
-	fprintf(stdout, ",%05x", np->rs[(np->rp+i-1)&0x7]);
+	fprintf(stdout, ",%05x", np->rs[(np->reg.rp+i-1)&0x7]);
     fprintf(stdout, "\n");
 }
 
 static void dump_reg(node_t* np)
 {
-    fprintf(stdout, "t=%05x,a=%05x,b=%03x,c=%x,p=%x,i=%x,s=%05x,r=%05x\n", 
-	    np->t, np->a, np->b, np->c, np->p, np->i, np->s, np->r);
+    fprintf(stdout, "t=%05x,a=%05x,b=%03x,c=%x,p=%03x,i=%x,s=%05x,r=%05x\n",
+	    np->reg.t, np->reg.a, np->reg.b, np->reg.c,
+	    np->reg.p, np->reg.i, np->reg.s, np->reg.r);
 }
 
-// read value of P return the current value and
-// perform auto increment if needed.
-
-static uint9_t p_auto(node_t* np)
-{
-    uint9_t p = np->p & MASK9;  // strip P(9)
-    if ((p >= RAM_START) && (p <= RAM_END2))
-	np->p = ((p + 1) & 0x7f) | (np->p & P9);
-    else if ((p >= ROM_START) && (p <= ROM_END2))
-	np->p = (ROM_START + (((p - ROM_START) + 1) & 0x7f)) | (np->p & P9);
-    return p;
-}
-
-static uint9_t a_auto(node_t* np)
-{
-    uint9_t a = np->a & MASK9;
-
-    if ((a >= RAM_START) && (a <= RAM_END2))
-	np->a = ((a + 1) & 0x7f);
-    else if ((a >= ROM_START) && (a <= ROM_END2))
-	np->a = (ROM_START + (((a - ROM_START) + 1) & 0x7f));
-    return a;
-}
+#ifdef DEBUG
+#define DUMP(np) do {					\
+    if ((np)->flags & (FLAG_DUMP_BITS)) {		\
+	SWAP_OUT(np);					\
+	fprintf(stdout, "[%03d] DUMP BEGIN\n", (np)->id);	\
+	if ((np)->flags & FLAG_DUMP_REG) dump_reg((np));	\
+	if ((np)->flags & FLAG_DUMP_DS)  dump_ds((np));		\
+	if ((np)->flags & FLAG_DUMP_RS)  dump_rs((np));		\
+	if ((np)->flags & FLAG_DUMP_RAM) dump_ram((np));	\
+	if ((np)->flags & FLAG_DUMP_ROM) dump_rom((np));	\
+	fprintf(stdout, "[%03d] DUMP END\n", (np)->id);		\
+    }								\
+    } while(0)
+#else
+#define DUMP(np)
+#endif
 
 static uint18_t read_mem(node_t* np, uint18_t addr)
 {
     uint18_t value;
     if (addr <= RAM_END2) {
-	value = np->ram[addr & 0x3f];
+	value = np->ram[addr & MASK6];
 	VERBOSE(np,"read ram[%x] = %x\n", addr, value);
     }
     else if (addr <= ROM_END2) {
-	value = np->rom[(addr-ROM_START) & 0x3f];
+	value = np->rom[(addr-ROM_START) & MASK6];
 	VERBOSE(np,"read rom[%x] = %x\n", addr, value);
     }
     else {
-	value = (*np->read_ioreg)(np, addr);
-	VERBOSE(np,"read ioreg[%x] = %x\n", addr, value);
+	value = (*np->read_ioreg)(np, addr & MASK9);
+	VERBOSE(np,"read ioreg[%x] = %x\n", addr & MASK9, value);
     }
     return value;
 }
@@ -133,9 +164,9 @@ static uint18_t read_mem(node_t* np, uint18_t addr)
 static void write_mem(node_t* np, uint18_t addr, uint18_t val)
 {
     if (addr <= RAM_END2) {
-	np->ram[addr & 0x3f] = val;
+	np->ram[addr & MASK6] = val;
 	VERBOSE(np,"write ram[%04x] = %02x %02x %02x %02x = %x\n",
-		addr & 0x3f,
+		addr & MASK6,
 		(val >> 13) & 0x1f,
 		(val >> 8) & 0x1f,
 		(val >> 3) & 0x1f,
@@ -145,199 +176,222 @@ static void write_mem(node_t* np, uint18_t addr, uint18_t val)
     else if (addr <= ROM_END2) {
 	fprintf(stderr, "warning: try to write in ROM area %x, value=%d\n",
 		addr, val);
-	// np->rom[(addr-ROM_START) & 0x3f] = val;
     }
     else {
-	VERBOSE(np,"write ioreg[%04x] = %x\n", addr, val);
-	(*np->write_ioreg)(np, addr, val);
+	VERBOSE(np,"write ioreg[%04x] = %x\n", addr & MASK9, val);
+	(*np->write_ioreg)(np, addr & MASK9, val);
     }
 }
 
 void f18_emu(node_t* np)
 {
-    uint18_t I;
+    // registers
+    uint18_t  T;           // top of data stack
+    uint18_t  S;           // second of data stack
+    uint3_t  SP;           // data stack pointer
+    uint18_t  R;           // top of return stack
+    uint3_t  RP;           // return stack pointer
+    uint18_t  I;           // instruction register
+    uint18_t  A;           // address register
+    uint10_t  P;           // program counter
+    uint9_t   B;           // write only register = io after reset
+    uint8_t   C;           // carry flag
+    // tmp
+    uint10_t  P0;           // p_inc
+    uint10_t  A0;           // a_inc
     uint32_t II;
     int n;
-    uint5_t ins;
 
-next:
+    SWAP_IN(np);
+
     DUMP(np);
-    np->i = read_mem(np, p_auto(np));
+next:
+    P0 = P & MASK9;
+    p_inc();
+    I = read_mem(np, P0);
     if (np->flags & FLAG_TERMINATE)
 	return;
-    I = np->i ^ IMASK; // "decode" instruction (why?)
-
 restart:
-    II = I << 2;
+    II = I ^ IMASK;  // decode
+    II = II << 2;
     n = 4;
 unext:
-    DUMP(np);
-    ins = (II >> 15) & 0x1f;
-    TRACE(np, "execute %s\n", f18_ins_name[ins]);
+    TRACE(np, "%03x: execute %s\n", P0, f18_ins_name[(II >> 15) & MASK5]);
     DELAY(np);
 
-    switch(ins) {
+    switch((II >> 15) & MASK5) {
     case INS_RETURN:
-	np->p = np->r;
+	P = R;
 	POP_r(np);
 	goto next;
 
     case INS_EXECUTE:
-	swap18(np->p, np->r);
-	np->p &= MASK10;   // maske sure P is 10 bits
+	swap18(P, R);
+	P &= MASK10;   // maske sure P is 10 bits
 	goto next;
 
     case INS_PJUMP:
 	goto load_p;
 
     case INS_PCALL:
-	PUSH_r(np, np->p);
+	PUSH_r(np, P);
 	goto load_p;
 
     case INS_UNEXT:
-	if (np->r == 0)
+	if (R == 0)
 	    POP_r(np);
 	else {
-	    np->r--;
+	    R--;
 	    goto restart;
 	}
 	break;
 
     case INS_NEXT:
-	if (np->r == 0)
+	if (R == 0)
 	    POP_r(np);
 	else {
-	    np->r--;
+	    R--;
 	    goto load_p;
 	}
 	goto next;
 
     case INS_IF:  // if   ( x -- x ) jump if x == 0
-	if (np->t == 0)
+	if (T == 0)
 	    goto load_p;
 	goto next;
 
     case INS_MINUS_IF:  // -if  ( x -- x ) jump if x >= 0
-	if (SIGNED18(np->t) >= 0)
+	if (SIGNED18(T) >= 0)
 	    goto load_p;
 	goto next;
 
     case INS_FETCH_P:  //  @p ( -- x ) fetch via P auto-increament
-	PUSH_s(np, read_mem(np, p_auto(np)));
+	P0 = P & MASK9;	
+	p_inc();	
+	PUSH_s(np, read_mem(np, P0));
 	break;
 
     case INS_FETCH_PLUS:  // @+ ( -- x ) fetch via A auto-increament
-	PUSH_s(np, read_mem(np, a_auto(np)));
+	A0 = A & MASK9;
+	a_inc();	
+	PUSH_s(np, read_mem(np, A0));
 	break;
 
     case INS_FETCH_B:  // @b ( -- x ) fetch via B
-	PUSH_s(np, read_mem(np, np->b));
+	PUSH_s(np, read_mem(np, B));
 	break;
 
     case INS_FETCH:    // @ ( -- x ) fetch via A
-	PUSH_s(np, read_mem(np, np->a));
+	PUSH_s(np, read_mem(np, A));
 	break;
 
     case INS_STORE_P:  // !p ( x -- ) store via P auto increment
-	write_mem(np, p_auto(np), np->t);
+	P0 = P & MASK9;
+	p_inc();
+	write_mem(np, P0, T);
 	POP_s(np);
 	break;
 
     case INS_STORE_PLUS: // !+ ( x -- ) \ write T in [A] pop data stack, inc A
-	write_mem(np, a_auto(np), np->t);
+	A0 = A & MASK9;	
+	a_inc();	
+	write_mem(np, A0, T);
 	POP_s(np);
 	break;
 
     case INS_STORE_B:  // !b ( x -- ) \ store T into [B], pop data stack
-	write_mem(np, np->b, np->t);
+	write_mem(np, B, T);
 	POP_s(np);
 	break;
 
     case INS_STORE:    // ! ( x -- ) \ store T info [A], pop data stack
-	write_mem(np, np->a, np->t);
+	write_mem(np, A, T);
 	POP_s(np);
 	break;
 
     case INS_MULT_STEP: { // t:a * s
-	int32_t t = SIGNED18(np->t);
-	if (np->a & 1) { // sign-extend and add s and t
-	    t += SIGNED18(np->s);
-	    if (np->p & P9) {
-		t += np->c;
-		np->c = (t >> 18) & 1;
+	// FIXME: check that S,T not P9 was changed (use nop otherwise)
+	int32_t t = SIGNED18(T);
+	if (A & 1) { // sign-extend and add s and t
+	    t += SIGNED18(S);
+	    if (P & P9) {
+		t += C;
+		C = (T >> 18) & 1;
 	    }
 	}
-	np->a = (np->a >> 1) | ((t & 1) << 17);
-	np->t = ((t >> 1) | (t & SIGN_BIT)) & MASK18;
+	A = (A >> 1) | ((T & 1) << 17);
+	T = ((T >> 1) | (T & SIGN_BIT)) & MASK18;
 	break;
     }
 
-    case INS_TWO_STAR:   np->t = (np->t << 1) & MASK18; break;
+    case INS_TWO_STAR:   T = (T << 1) & MASK18; break;
 
-    case INS_TWO_SLASH:  np->t = (np->t >> 1) | (np->t & SIGN_BIT); break;
+    case INS_TWO_SLASH:  T = (T >> 1) | (T & SIGN_BIT); break;
 
-    case INS_NOT:        np->t = (~np->t) & MASK18; break;
+    case INS_INV:        T = (~T) & MASK18; break;
 
     case INS_PLUS: {  // + or +c  ( x y -- (x+y) ) | ( x y -- (x+y+c) )
-	int32_t t = SIGNED18(np->t) + SIGNED18(np->s);
-	if (np->p & P9) {
-	    t += np->c;
-	    np->c = (t >> 18) & 1;
+	// FIXME: check that S,T not P9 was changed (use nop otherwise)
+	// expect in slot 3 then the prefetch will guarantee that
+	int32_t t = SIGNED18(T) + SIGNED18(S);
+	if (P & P9) {
+	    T += C;
+	    C = (T >> 18) & 1;
 	}
-	np->t = t & MASK18;
-	np->s = POP_ds(np);
+	T = t & MASK18;
+	S = POP_ds(np);
 	break;
     }
 
     case INS_AND: // ( x y -- ( x & y) )
-	np->t &= np->s;
-	np->s = POP_ds(np);
+	T &= S;
+	S = POP_ds(np);
 	break;
 
-    case INS_OR:  // ( x y -- ( x ^ y) )  why not named XOR????
-	np->t ^= np->s;
-	np->s = POP_ds(np);
+    case INS_XOR:  // ( x y -- ( x ^ y) )
+	T ^= S;
+	S = POP_ds(np);
 	break;
 
     case INS_DROP:
-	np->t = np->s;
-	np->s = POP_ds(np);
+	T = S;
+	S = POP_ds(np);
 	break;
 
     case INS_DUP:  // ( x -- x x )
-	PUSH_ds(np, np->s);
-	np->s = np->t;
+	PUSH_ds(np, S);
+	S = T;
 	break;
 
-    case INS_POP:  // push R onto data stack and pop return stack
-	PUSH_s(np, np->r);
-	np->r = POP_rs(np);
+    case INS_FROM_R:  // push R onto data stack and pop return stack
+	PUSH_s(np, R);
+	R = POP_rs(np);
 	break;
 
     case INS_OVER:  // ( x y -- x y x )
-	PUSH_ds(np, np->s);
-	swap18(np->t, np->s);
+	PUSH_ds(np, S);
+	swap18(T, S);
 	break;
 
     case INS_A:  // ( -- A )  push? A onto data stack
-	PUSH_s(np, np->a);
+	PUSH_s(np, A);
 	break;
 
     case INS_NOP:
 	break;
 
-    case INS_PUSH:  // push T onto return stack and pop data stack
-	PUSH_r(np, np->t);
+    case INS_TO_R:  // push T onto return stack and pop data stack
+	PUSH_r(np, T);
 	POP_s(np);
 	break;
 
     case INS_B_STORE:  // b! ( x -- ) store into B
-	np->b = np->t;
+	B = T;
 	POP_s(np);
 	break;
 
     case INS_A_STORE:  // a! ( x -- ) store into A
-	np->a = np->t;
+	A = T;
 	POP_s(np);
 	break;
     }
@@ -347,12 +401,12 @@ unext:
     goto unext;
 
 load_p:
-    // destination addresses are unencoded and must are retrieved
+    // destination addresses are unencoded and must be retrieved
     // from the "original" i register
     switch(n) {
-    case 4: np->p = np->i & MASK10; break;
-    case 3: np->p = np->i & MASK8; break;
-    case 2: np->p = np->i & MASK3; break;
+    case 4: P = (P & ~MASK10) | (I & MASK10); break;
+    case 3: P = (P & ~MASK8)  | (I & MASK8); break;
+    case 2: P = (P & ~MASK3)  | (I & MASK3); break;
     }
     goto next;
 }

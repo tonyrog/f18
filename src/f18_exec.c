@@ -21,13 +21,14 @@
 #include "f18_scan.h"
 #include "f18_node.h"
 
+#define MAX_SCAN_HEAP_SIZE 256 // symbols table & names
+
+extern int open_pty(char* name, size_t max_namelen);
+
 extern void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value);
 extern uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg);
 
 extern void init_node(int i, int j);
-extern void init_up_down(int i, int j);
-extern void init_left_right(int i, int j);
-
 
 #ifndef SIGRETTYPE		/* allow override via Makefile */
 #define SIGRETTYPE void
@@ -44,6 +45,7 @@ static struct termios tty_smode;
 static struct termios tty_rmode;
 static size_t  g_page_size = 0;
 static uint18_t g_flags = 0;
+static uint18_t g_id    = 999;
 static uint32_t g_v = 1, g_h = 1;
 
 // System thread state tracking (atomics for counters, mutex/cond for wait)
@@ -106,6 +108,9 @@ static SIGRETTYPE suspend(int);
 static SIGRETTYPE (*orig_ctl_c)(int);
 
 node_t* node[8][18];
+
+async_reader_t r708;
+async_writer_t w708;
 
 SIGRETTYPE (*sys_sigset(int sig, SIGRETTYPE (*func)(int)))(int)
 {
@@ -222,11 +227,17 @@ void usage(char* prog)
     fprintf(stderr, " options:\n"
 	    "    -v               Enable verbose   (if debug compiled)\n"
 	    "    -t               Enable trace     (if debug compiled)\n"
-	    "    -i               Interactive\n"	    
-	    "    -D reg,ram,rs,ds Dump registers,ram,return-stack,data-stack\n"
+	    "    -i               Interactive\n"
+	    "    -I               id of node to dump, 888 for map\n"    
+	    "    -D <comma-list>  Dump data and registers\n"
+	    "       reg           registers\n"
+	    "       ram           RAM\n"
+	    "       rom           ROM\n"
+            "       rs            return stack\n"
+	    "       ds            data stack\n"
 	    "    -d <delay>       Set delay between instructions (in usecs)\n"
 	    "    -l VxH           Set processor mesh layout (max 8x18)\n"
-	    "    -f input-file    Read interpreted stream\n"	    
+	    "    -f load-file     Load node RAM from file (testing)\n"	    
 	);
     exit(1);
 }
@@ -236,13 +247,106 @@ void* f18_emu_start(void *arg)
     node_t* np = (node_t*) arg;
 
     sys_thread_started();
-    VERBOSE(np, "node [%d,%d] started\r\n",
-	    ID_TO_ROW(np->id), ID_TO_COLUMN(np->id));
+    VERBOSE(np, "node started%s\n", "");
     f18_emu(np);
-    VERBOSE(np, "node [%d,%d] stopped\r\n",
-	    ID_TO_ROW(np->id), ID_TO_COLUMN(np->id));
+    VERBOSE(np, "node stopped%s\n", "");
+    // FIXME: cleanup neighbours etc ... possible? needed?
     sys_thread_terminated();
     return NULL;
+}
+
+void* async_reader_start(void *arg)
+{
+    sys_thread_started();
+    async_reader(arg);
+    sys_thread_terminated();
+    return NULL;
+}
+
+void* async_writer_start(void *arg)
+{
+    sys_thread_started();
+    async_writer(arg);
+    sys_thread_terminated();
+    return NULL;
+}
+
+char node_map[3*8][5*18] = { {' '}, };
+
+void draw_com_map()
+{
+    int v, h;
+
+    for (v = 0; v < 8; v++) {
+	for (h = 0; h < 18; h++) {
+	    int i = v*3;
+	    int j = h*5;
+	    uint9_t comm = ConfigMap[v][h].comm;
+	    uint9_t io_addr = ConfigMap[v][h].io_addr;
+	    uint9_t dbits   = dirbits(v, h, comm);
+	    uint9_t ibits   = io_addr ? dirbits(v, h, io_addr) : 0;
+
+	    memcpy(&node_map[i][j],   "     ", 5);
+	    memcpy(&node_map[i+1][j], "     ", 5);
+	    memcpy(&node_map[i+2][j], "     ", 5);
+	    node_map[i+1][j+2] = 'x';
+	    
+	    if (dbits & DIR_BIT(UP))
+		node_map[i+0][j+2] = 'N';
+	    else if (ibits & DIR_BIT(UP))
+		node_map[i+0][j+2] = 'G';	    
+
+	    if (dbits & DIR_BIT(LEFT))
+		node_map[i+1][j+0] = 'W';
+	    else if (ibits & DIR_BIT(LEFT))
+		node_map[i+1][j+0] = 'G';
+
+	    if (dbits & DIR_BIT(RIGHT))
+		node_map[i+1][j+4] = 'E';
+	    else if (ibits & DIR_BIT(RIGHT))
+		node_map[i+1][j+4] = 'G';
+
+
+	    if (dbits & DIR_BIT(DOWN))
+		node_map[i+2][j+2] =  'S';
+	    else if (ibits & DIR_BIT(DOWN))
+		node_map[i+2][j+2] = 'G';
+	}
+    }
+
+    printf("    ");
+    for (h = 0; h < 18; h++)
+	printf("  %02d  ", h);
+    printf("\n");
+
+    printf("   +");
+    for (h = 0; h < 18; h++)
+	printf("-----+");
+    printf("\n");
+
+    // draw 7 up 0 down
+    for (v = 7; v >= 0; v--) {
+	int i, j, k, l;
+	
+	for (l = 0; l < 3; l++) {
+	    if (l == 1)
+		printf(" %d |", v);
+	    else
+		printf("   |");
+	    i = v*3 + l;
+	    for (h = 0; h < 18; h++) {
+		j = h*5;	    
+		for (k = 0 ; k < 5; k++)
+		    printf("%c", node_map[i][j+k]);
+		printf("|");	    
+	    }
+	    printf("\n");
+	}
+	printf("   +");
+	for (h = 0; h < 18; h++)
+	    printf("-----+");
+	printf("\n");	
+    }
 }
 
 //
@@ -250,9 +354,15 @@ void* f18_emu_start(void *arg)
 //  -v               Verbose       (if debug compiled)
 //  -t               Trace         (if debug comipled)
 //  -i               Interactive
-//  -D reg,ram,rs,ds Dump registers,ram,return-stack,data-stack
+//  -D <comma-list>  Dump data and registers
+//     reg           registers
+//     ram           RAM
+//     rom           ROM
+//     rs            return stack
+//     ds            data stack
 //  -d delay         Set delay between instructions
 //  -l VxH           processor layout (max 8x18)
+//  -f file          Load code from file.
 //
 
 
@@ -263,17 +373,19 @@ int main(int argc, char** argv)
     int i,j;
     useconds_t delay = 0;
     char* opt_layout = NULL;
-    uint32_t h=1, v=1;
+    uint32_t h=18, v=8;
     void* node_mem;
     uint8_t* np_mem;
     size_t alloc_size;
     int interactive = 0;
     char* filename = NULL;
     int file_fd = -1;
+    uint18_t id = 999;
+    
     g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
     g_flags = 0;
     
-    while((c=getopt(argc, argv, "ivtl:d:D:f:")) != -1) {
+    while((c = getopt(argc, argv, "ivtl:d:I:D:f:")) != -1) {
 	switch(c) {
 	case 'i':
 	    interactive = 1;
@@ -298,6 +410,9 @@ int main(int argc, char** argv)
 	    }
 	    break;
 	}
+	case 'I':
+	    id = atoi(optarg);
+	    break;
 	case 'D': {
 	    char* ptr = optarg;
 	    while(*ptr) {
@@ -317,6 +432,14 @@ int main(int argc, char** argv)
 		    else 
 			usage(basename(argv[0]));
 		}
+		else if (strncmp(ptr, "rom", 3) == 0) {
+		    if ((ptr[3] == '\0') || (ptr[3] == ',')) {
+			g_flags |= FLAG_DUMP_ROM;
+			ptr += (ptr[3] == ',') ? 4 : 3;
+		    }
+		    else 
+			usage(basename(argv[0]));
+		}		
 		else if (strncmp(ptr, "rs", 2) == 0) {
 		    if ((ptr[2] == '\0') || (ptr[2] == ',')) {
 			g_flags |= FLAG_DUMP_RS;
@@ -342,6 +465,11 @@ int main(int argc, char** argv)
 	default:
 	    usage(basename(argv[0]));
 	}
+    }
+
+    if (id == 888) {   // draw comm map
+	draw_com_map();
+	exit(0);
     }
 
     argc -= optind;
@@ -412,43 +540,200 @@ int main(int argc, char** argv)
     for (i = 0; i < v; i++) {
 	for (j = 0; j < h; j++) {
 	    reg_node_t* np = (reg_node_t*) np_mem;
-	    node[i][j]= (node_t*) np;
-	    
-	    np->n.id = MAKE_ID(i,j);
+	    f18_rom_type_t rt;
 
-	    // fixme! (SERDES node)
-	    np->tty_fd     = tty_fd;
-	    np->stdin_fd   = (file_fd >= 0) ? file_fd : 0;
-	    np->stdout_fd  = 1;
+	    memset(np, 0, sizeof(reg_node_t));
 	    
-	    init_node(i, j);
+	    node[i][j]= (node_t*) np;
+	    // printf("node[%d][%02d] = %p\n", i, j, np);
+	    rt = RomTypeMap[i][j];
+	    np->n.rom_type = rt;
+	    np->n.rom = RomMap[rt].addr;
+	    np->n.id = MAKE_ID(i,j);
+	    if ((np->n.id == 708) && (rt == async_boot)) {
+		char pty_name[256];
+		int fd;
+
+		memset(&r708, 0, sizeof(r708));
+		memset(&w708, 0, sizeof(w708));
+
+		f18_chan_init(&r708.chan);
+		f18_chan_init(&w708.chan);
+		
+		if ((fd = open_pty(pty_name, sizeof(pty_name))) < 0) {
+		    fprintf(stderr, "unable to open a pty error=%s (%d)\n",
+			    strerror(errno), errno);
+		    exit(1);
+		}
+		printf("PTY_NAME=%s\n", pty_name);
+		
+		r708.fd = fd;
+		w708.fd = fd;
+	    }
+
+	    np->dmask = 0;
+	    np->imask = 0;
+	    
+	    f18_chan_init(&np->chan);
+
+	    np->neighbour[0] = NULL;
+	    np->neighbour[1] = NULL;
+	    np->neighbour[2] = NULL;
+	    np->neighbour[3] = NULL;
+	    np->neighbour[4] = NULL;	    
 
 	    np->n.io     = IMASK;
-	    np->n.flags  = g_flags;  // specific for node?
-	    np->n.delay  = delay;    // specific for node?
-	    
-	    if ((i == 0) && (j == 0)) {
-		np->n.p = IOREG_STDIO;
-	    }
+	    if (np->n.id == g_id)
+		np->n.flags  = g_flags; // specific for node?
 	    else
-		np->n.p = IOREG_RDLU;
-	    np->n.b = IOREG_TTY;
+		np->n.flags = g_flags & ~(FLAG_DUMP_ROM|FLAG_DUMP_RAM);
+	    np->n.delay  = delay;    // specific for node?
+
+	    np->n.reg.p = ConfigMap[i][j].reset;
+	    np->n.io_addr = ConfigMap[i][j].io_addr;
+	    np->dmask = dirbits(i,j,ConfigMap[i][j].comm);
+	    np->imask = (ConfigMap[i][j].io_addr ?
+			 dirbits(i,j,ConfigMap[i][j].io_addr) : 0);
+	    
+	    // if ((i == 0) && (j == 0))
+	    //   np->n.reg.p = IOREG_STDIO;
+	    np->n.reg.b = IOREG_TTY;
 	    np->n.read_ioreg  = f18_read_ioreg;
 	    np->n.write_ioreg = f18_write_ioreg;
 
 	    np_mem += (PAGE(NODE_SIZE));
 	}
     }
-    // create all the socket pairs needed
-    for (i = 0; i < v; i++) {
-	for (j = 0; j < h; j++) {
-	    if (j > 0)   // create left/right
-		init_left_right(i, j);
-	    if (i > 0)  // create up/down
-		init_up_down(i, j);
+
+    // lets load node if -f was given
+    if (file_fd >= 0) {
+	uint18_t nid = 0xfff;
+	uint18_t addr = 0;
+	uint18_t data = 0;
+	node_t* np = NULL;
+	f18_symbol_table_t symtab;
+	uint8_t heap[MAX_SCAN_HEAP_SIZE];
+	int line = 0;
+	int r;
+
+	symtab.symbol = (f18_symbol_t*) heap;
+	symtab.next   =  (f18_symbol_t*) heap;
+	symtab.hp     = heap;
+	symtab.heap   = heap;
+	symtab.nptr   = (char*)heap + MAX_SCAN_HEAP_SIZE;
+	symtab.heap_size = MAX_SCAN_HEAP_SIZE;
+
+	while((r = f18_scan_line(file_fd, &line, &addr, &nid, &data, &symtab)) >= 0) {
+	    // printf("exec: r=%d\n", r);	    
+	    switch(r) {
+	    case META_NODE:
+		if (np != NULL) { // find main in symtab
+		    if ((i = find_symbol("main", &symtab)) >= 0)
+			np->reg.p = symtab.symbol[i].value;
+		    printf("set p = %03x\n", np->reg.p);		    
+		}
+		// printf("load: node=%03d\n", nid);
+		// reset symbol table? keep?
+		symtab.symbol = (f18_symbol_t*) heap;
+		symtab.next   =  (f18_symbol_t*) heap;
+		symtab.hp     = symtab.heap;
+		symtab.nptr   = (char*)heap + symtab.heap_size;
+		np = node[ID_TO_ROW(nid)][ID_TO_COLUMN(nid)];
+		addr = 0;
+		break;
+	    case META_ORG:
+		// printf("load: set org=%03x\n", addr);
+		break;
+	    default:
+		// printf("load: %03d ram[%03x]=%06x\n", nid, addr, data);
+		if (np != NULL) {
+		    np->ram[addr & 0x3f] = data;
+		    addr++;
+		}
+	    }
+	}
+	if (np != NULL) { // find main in symtab
+	    if ((i = find_symbol("main", &symtab)) >= 0) {
+		np->reg.p = symtab.symbol[i].value;
+		printf("set p = %03x\n", np->reg.p);
+	    }
 	}
     }
 
+    // init neighbours channels
+    for (i=0; i < v; i++) {
+	for (j = 0; j < h; j++) {
+	    reg_node_t* np = (reg_node_t*) node[i][j];
+
+	    if (i < v-1)
+		np->neighbour[UP]   = &((reg_node_t*)node[i+1][j])->chan;
+	    else if (i == v-1) {
+		if (np->n.id == 708) {
+		    np->neighbour[UP] = &r708.chan;  // read async
+		    r708.out = &np->chan;              //
+		    r708.n.id = 808;
+		    np->neighbour[GPIO] = &w708.chan; // write from here
+		    w708.n.id = 908;
+		    w708.in = &np->chan;              // write from 708
+		}
+	    }
+	    if (i > 0)
+		np->neighbour[DOWN] = &((reg_node_t*)node[i-1][j])->chan;
+	    if (j > 0)
+		np->neighbour[LEFT] = &((reg_node_t*)node[i][j-1])->chan;
+	    if (j < h-1)
+		np->neighbour[RIGHT] = &((reg_node_t*)node[i][j+1])->chan;
+
+	    // FIXME add io channels !
+	}
+    }
+
+    if (id != 0x3ff) {
+	int i = ID_TO_ROW(id);
+	int j = ID_TO_COLUMN(id);
+	reg_node_t* np = (reg_node_t*) node[i][j];
+
+	if (g_flags & FLAG_DUMP_ROM) {
+	    f18_rom_type_t rt;
+	    i = ID_TO_ROW(id);
+	    j = ID_TO_COLUMN(id);
+	    rt = ConfigMap[i][j].rom;
+	    
+	    printf("Dump ROM\n");
+	    printf("  type=\"%s\"\n", RomMap[rt].name);
+	    printf("  version=\"%s\n", RomMap[rt].vers);
+	    printf("  size=%ld\n", RomMap[rt].size);
+	    printf("  io_type=%d\n", ConfigMap[i][j].io_type);
+	    printf("  io_addr=%03x\n", ConfigMap[i][j].io_addr);
+	    printf("  comm=%03x\n", ConfigMap[i][j].comm);
+	    printf("  reset=%03x\n", ConfigMap[i][j].reset);
+	    
+	    f18_disasm(RomMap[rt].addr, SymMap[i][j], ROM_START,
+		       RomMap[rt].size);
+	}
+	if (g_flags & FLAG_DUMP_RAM) {
+	    f18_disasm(np->n.ram, NULL, RAM_START, (RAM_END-RAM_START)+1);
+	}
+    }
+    
+    // shoule we start io before processes? lets try
+
+    pthread_attr_init(&r708.attr);
+    pthread_attr_setstacksize(&r708.attr, PAGE(STACK_SIZE));
+    if (pthread_create(&r708.thread,&r708.attr,async_reader_start,
+		       (void*) &r708) <0) {
+	perror("pthread_create"); 
+	exit(1);
+    }
+
+    pthread_attr_init(&w708.attr);
+    pthread_attr_setstacksize(&w708.attr, PAGE(STACK_SIZE));
+    if (pthread_create(&w708.thread,&w708.attr,async_writer_start,
+		       (void*)&w708) <0) {
+	perror("pthread_create");
+	exit(1);
+    }
+    
     // Set num_active before creating threads to avoid race where main
     // thread checks the termination condition before threads have started
     num_active = v * h;
@@ -462,10 +747,9 @@ int main(int argc, char** argv)
 	    if (g_flags & FLAG_VERBOSE) {
 		size_t size;
 		pthread_attr_getstacksize(&np->attr, &size);
-		fprintf(stderr, "thread stack size: %ld\n", size);
+		// fprintf(stderr, "thread stack size: %ld\n", size);
 	    }
-	    VERBOSE(np, "about to start node %p [%d,%d]\r\n",
-		    np, ID_TO_ROW(np->n.id), ID_TO_COLUMN(np->n.id));
+	    VERBOSE(np, "about to start node%s\n", "");
 	    if (pthread_create(&np->thread,&np->attr,f18_emu_start,(void*) np) <0) {
 		perror("pthread_create"); 
 		exit(1);
@@ -483,19 +767,20 @@ int main(int argc, char** argv)
     for (i = 0; i < (int)g_v; i++) {
 	for (j = 0; j < (int)g_h; j++) {
 	    reg_node_t* np = (reg_node_t*) node[i][j];
-	    np->n.flags |= FLAG_TERMINATE;
-#ifdef MUTEX_IMPL
-	    pthread_mutex_lock(&np->lock);
-	    pthread_cond_broadcast(&np->cond);
-	    pthread_mutex_unlock(&np->lock);
-#endif
+
+	    np->n.flags |= FLAG_TERMINATE;  // emulator loop
+	    f18_chan_terminate(&np->chan);  // signal termination
 	}
     }
+    f18_chan_terminate(&r708.chan);
+    f18_chan_terminate(&w708.chan);
 
     // Join all threads
     for (i = 0; i < (int)g_v; i++)
 	for (j = 0; j < (int)g_h; j++)
 	    pthread_join(((reg_node_t*)node[i][j])->thread, NULL);
+    pthread_join(r708.thread, NULL);
+    pthread_join(w708.thread, NULL);
 
     if (tty_fd >= 0)
 	tty_reset(tty_fd);

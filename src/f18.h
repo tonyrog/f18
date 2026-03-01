@@ -25,26 +25,44 @@
 #define INS_MULT_STEP  0x10   // +*
 #define INS_TWO_STAR   0x11   // 2*
 #define INS_TWO_SLASH  0x12   // 2/
-#define INS_NOT        0x13   // -
+#define INS_INV        0x13   // ~
 #define INS_PLUS       0x14   // +
 #define INS_AND        0x15   // and
-#define INS_OR         0x16   // or 	ALU 	1.5 	(exclusive or)
-#define INS_DROP       0x17   // drop ALU 	1.5
+#define INS_XOR        0x16   // xor    ALU 	1.5 	(exclusive or)
+#define INS_DROP       0x17   // drop   ALU 	1.5
 #define INS_DUP        0x18   // dup 	ALU 	1.5
-#define INS_POP        0x19   // pop 	ALU 	1.5
+#define INS_FROM_R     0x19   // pop 	ALU 	1.5
 #define INS_OVER       0x1a   // over 	ALU 	1.5
 #define INS_A          0x1b   // a 	ALU 	1.5 	(A to T)
 #define INS_NOP        0x1c   // . 	ALU 	1.5 	“nop”
-#define INS_PUSH       0x1d   // push 	ALU 	1.5 	(from T to R)
+#define INS_TO_R       0x1d   // push 	ALU 	1.5 	(from T to R)
 #define INS_B_STORE    0x1e   // b! 	ALU 	1.5 	“b-store” (store into B)
 #define INS_A_STORE    0x1f   // a! 	ALU 	1.5 	“a-store” (store into A)
 
+#define META_ORG       0x20   // arg = address
+#define META_NODE      0x21   // arg = node number
+#define META_DEF       0x22   // ':' arg = symbol name
+#define META_VALUE     0x80   // value
 
 typedef uint32_t uint18_t;  // 18 bits packed into 32 bits
 typedef uint16_t uint9_t;   // 9 bits packed into 16 bits
 typedef uint16_t uint10_t;  // 10 bits packed into 16 bits
 typedef uint8_t  uint5_t;   // 5 bits packed into 8 bits
 typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
+
+typedef struct {
+    uint18_t    value;
+    char* name;
+} f18_symbol_t;
+
+typedef struct {
+    f18_symbol_t* symbol;
+    f18_symbol_t* next;   // next slot to insert to
+    uint8_t* hp;          // heap pointer (from first up)
+    char*    nptr;        // name pointer from low heap to high
+    size_t   heap_size;   // total size of heap
+    uint8_t* heap;        // start heap memory
+} f18_symbol_table_t;
 
 // address layout in binary
 // 000000000 - 000111111    RAM
@@ -67,23 +85,23 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define IOREG_STDIO   0x102  // test/debug
 #define IOREG_TTY     0x103  // test/debug
 
-#define IOREG_IO      0x15D  // i/o control and status
+#define IOREG__D_U    0x105  // 0000
+#define IOREG__D__    0x115  // 0001
+#define IOREG__DLU    0x125  // 0010
+#define IOREG__DL_    0x135  // 0011
 #define IOREG_DATA    0x141  // up-port without handshake
-#define IOREG____U    0x145  // up
-#define IOREG___L_    0x175  // left
-#define IOREG___LU    0x165  // left or up
-#define IOREG__D__    0x115  // down
-#define IOREG__D_U    0x105
-#define IOREG__DL_    0x135
-#define IOREG__DLU    0x125
-#define IOREG_R___    0x1D5  // right
-#define IOREG_R__U    0x1C5
-#define IOREG_R_L_    0x1F5
-#define IOREG_R_LU    0x1E5
-#define IOREG_RD__    0x195
-#define IOREG_RD_U    0x185
-#define IOREG_RDL_    0x1B5
-#define IOREG_RDLU    0x1A5
+#define IOREG____U    0x145  // 0100
+#define IOREG_IO      0x15D  // i/o control and status
+#define IOREG___LU    0x165  // 0110
+#define IOREG___L_    0x175  // 0111
+#define IOREG_RD_U    0x185  // 1000
+#define IOREG_RD__    0x195  // 1001
+#define IOREG_RDLU    0x1A5  // 1010
+#define IOREG_RDL_    0x1B5  // 1011
+#define IOREG_R__U    0x1C5  // 1100
+#define IOREG_R___    0x1D5  // 1101
+#define IOREG_R_LU    0x1E5  // 1110
+#define IOREG_R_L_    0x1F5  // 1111
 
 // IO register number coding
 #define F18_DIR_BITS      0x105  // Direction pattern
@@ -108,12 +126,12 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define F18_IO_PIN3       0x00008
 #define F18_IO_PIN1       0x00002
 
-
+#define GPIO  4
 #define RIGHT 3
 #define DOWN  2
 #define LEFT  1
 #define UP    0
-#define DIR_BIT(n)     (1 << (n))            // RDLU => 1,2,4,8
+#define DIR_BIT(n)     (1 << (n))            // RDLU => 1,2,4,8,16
 #define F18_DIR_BIT(n) (DIR_BIT((n)) << 8)   // RDLU => F18_<dir>_BIT
 #define F18_IO_DIR_WR(n) ((1<<(2*(n)))<<9)   // RDLU => F18_IO_<dir>_WR
 #define F18_IO_DIR_RD(n) ((1<<(2*(n)+1))<<9) // RDLU => F18_IO_<dir>_RD
@@ -121,9 +139,13 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define P9          0x200    // P9 bit
 #define SIGN_BIT    0x20000  // 18 bit sign bit
 #define MASK3       0x7
+#define MASK5       0x1f
+#define MASK6       0x3f
+#define MASK7       0x7f
 #define MASK8       0xff
 #define MASK9       0x1ff
 #define MASK10      0x3ff
+#define MASK13      0x1fff
 #define MASK18      0x3ffff
 #define MASK19      0x7ffff
 #define IMASK       0x15555  // exeucte/compiler mask
@@ -133,10 +155,12 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define FLAG_VERBOSE      0x00001
 #define FLAG_TRACE        0x00002
 #define FLAG_TERMINATE    0x00004
+#define FLAG_DUMP_ROM     0x00008
 #define FLAG_DUMP_REG     0x00010
 #define FLAG_DUMP_RAM     0x00020
 #define FLAG_DUMP_RS      0x00040
 #define FLAG_DUMP_DS      0x00080
+#define FLAG_DUMP_BITS    0x000F8
 #define FLAG_RD_BIN_RIGHT 0x00800
 #define FLAG_RD_BIN_DOWN  0x00400
 #define FLAG_RD_BIN_LEFT  0x00200
@@ -146,9 +170,99 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 #define FLAG_WR_BIN_DOWN  0x02000
 #define FLAG_WR_BIN_UP    0x01000
 
-#define MAKE_ID(i,j)     ((((i)&0x7) << 5)|((j)&0x1f))
-#define ID_TO_ROW(id)    ((id)>>5)
-#define ID_TO_COLUMN(id) ((id) & 0x1f)
+
+#define MAKE_ID(i,j)     ((i)*100+(j))
+#define ID_TO_ROW(id)    ((id)/100)
+#define ID_TO_COLUMN(id) ((id)%100)
+
+// Physical directions
+#define EAST  0
+#define NORTH 1
+#define WEST  2
+#define SOUTH 3
+
+// turn CCW (+1)
+//
+//     N
+//   W   E
+//     S
+//
+
+#define TURN90(x)  (((x)+1) & 3)
+#define TURN180(x) (((x)+2) & 3)
+#define TURN270(x) (((x)+3) & 3)
+
+// portmap from direction
+#define east_io(i,j)  (((j)&1) ? IOREG___L_ : IOREG_R___)
+#define north_io(i,j) (((i)&1) ? IOREG____U : IOREG__D__)
+#define west_io(i,j)  (((j)&1) ? IOREG_R___ : IOREG___L_)
+#define south_io(i,j) (((i)&1) ? IOREG__D__ : IOREG____U)
+
+#define east_bit(i,j)  (((j)&1) ? DIR_BIT(LEFT) : DIR_BIT(RIGHT))
+#define north_bit(i,j) (((i)&1) ? DIR_BIT(UP) : DIR_BIT(DOWN))
+#define west_bit(i,j)  (((j)&1) ? DIR_BIT(RIGHT) : DIR_BIT(LEFT))
+#define south_bit(i,j) (((i)&1) ? DIR_BIT(UP) : DIR_BIT(DOWN))
+
+#define east(id)  MAKE_ID(ID_TO_ROW(id),ID_TO_COLUMN(id)+1)
+#define north(id) MAKE_ID(ID_TO_ROW(id)-1,ID_TO_COLUMN(id))
+#define west(id)  MAKE_ID(ID_TO_ROW(id),ID_TO_COLUMN(id)-1)
+#define south(id) MAKE_ID(ID_TO_ROW(id)+1,ID_TO_COLUMN(id))
+
+typedef struct {
+    uint18_t t;            // top of data stack
+    uint18_t s;            // second of data stack
+    uint3_t  sp;           // data stack pointer
+    uint18_t r;            // return top of return stack
+    uint3_t  rp;           // return stack pointer
+    uint18_t  i;           // instruction register
+    uint18_t  a;           // address register
+    uint9_t   b;           // write only register = io after reset    
+    uint10_t  p;           // program counter
+    uint8_t   c;           // carry flag    
+} f18_regs_t;
+
+typedef enum {
+    basic,
+    serdes_boot,
+    sdram_data,
+    sdram_control,
+    sdram_addr,
+    eForth_bitsy,
+    eForth_stack,
+    sdram_mux,
+    sdram_idle,
+    analog,    
+    one_wire,
+    sync_boot,
+    spi_boot,
+    async_boot
+} f18_rom_type_t;
+
+typedef enum {
+    none = 0,
+    serdes,
+    gpio_x1,
+    gpio_x2,
+    gpio_x4,
+    analog_pin,
+    parallel_bus,
+} f18_io_type_t;
+
+typedef struct {
+    f18_rom_type_t type;
+    char* name;
+    char* vers;
+    const uint18_t* addr;
+    size_t size;
+} f18_rom_t;
+    
+typedef struct {
+    f18_rom_type_t rom;
+    f18_io_type_t  io_type;    
+    uint9_t comm;   // com ports present
+    uint9_t io_addr;
+    uint9_t reset;  // reset address "cold" | ioreg
+} f18_config_t;
 //
 // sizeof(node_t) = 656 bytes (update me now and then)
 // total ram usage for threads 93888 bytes.
@@ -156,42 +270,36 @@ typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 //
 typedef struct _node_t {
     uint18_t       ram[64];
-    const uint18_t rom[64];
+    f18_rom_type_t rom_type;
+    const uint18_t* rom;
     uint18_t       io;      // io status register (read/write)
-    uint18_t       id;      // id r:3,col:5
+    uint18_t       id;      // id 000 - 717 (decimal)
     useconds_t delay;       // delay between instructions
     uint18_t flags;         // flags,debug,trace...
+    uint9_t io_addr;        // io_addr for gpio or 0 if not used
 
     // System dependent functions
     void* user;  // user data pointer
     uint18_t (*read_ioreg)(struct _node_t* np, uint18_t reg);
     void     (*write_ioreg)(struct _node_t* np, uint18_t reg, uint18_t val);
 
-    uint18_t t;            // top of data stack
-    uint18_t s;            // second of data stack
+    f18_regs_t reg;        // saved registers    
     uint18_t ds[8];        // data stack
-    uint3_t  sp;           // data stack pointer
-
-    uint18_t r;            // return top of return stack
     uint18_t rs[8];        // return stack
-    uint3_t  rp;           // return stack pointer
 
-    uint18_t  i;           // instruction register
-    uint18_t  a;           // address register
-    uint10_t  p;           // program counter
-    uint9_t   b;           // write only register = io after reset
-    uint8_t   c;           // carry flag
+    // trace buffer
+    char buf[32];
 } node_t;
 
 
 #ifdef DEBUG
 #define VERBOSE(np,fmt,...) do {			\
-	if (((node_t*)(np))->flags & FLAG_VERBOSE)	\
-	    fprintf(stdout, fmt, __VA_ARGS__);		\
+	if (((node_t*)(np))->flags & FLAG_VERBOSE)			\
+	    fprintf(stdout,"[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
 #define TRACE(np,fmt, ...) do {				\
 	if (((node_t*)(np))->flags & FLAG_TRACE)			\
-	    fprintf(stdout, "[%d,%d]: "fmt, ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), __VA_ARGS__); \
+	    fprintf(stdout, "[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
 #define DELAY(np) do {					\
 	if (((node_t*)(np))->delay)			\
@@ -203,7 +311,19 @@ typedef struct _node_t {
 #define DELAY(np)
 #endif
 
-extern void     f18_emu(node_t* p);
+#define ERROR(np,fmt,...) do {			\
+	if (((node_t*)(np))->flags & FLAG_VERBOSE)			\
+	    fprintf(stderr,"[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
+    } while(0)
+
+
+extern void f18_emu(node_t* p);
+extern int f18_disasm_instruction(uint18_t addr, uint18_t I,
+				  const f18_symbol_t* sym,
+				  char* ptr, size_t maxlen);
+extern void f18_disasm(const uint18_t* insp, const f18_symbol_t* sym,
+		       uint18_t addr, size_t n);
+
 
 // System thread state tracking
 extern void sys_thread_started(void);
@@ -212,5 +332,28 @@ extern void sys_enter_blocked_port(void);
 extern void sys_leave_blocked_port(void);
 extern void sys_enter_blocked_ext(void);
 extern void sys_leave_blocked_ext(void);
+
+extern const char* f18_ins_name[32];
+// f8_rom_type_t => f18_rom_t
+extern const f18_rom_t RomMap[];
+// node-id => f8_rom_type_t
+extern const f18_rom_type_t RomTypeMap[8][18];
+// node-id => f18_symbol_t[]
+extern const f18_symbol_t* SymMap[8][18];
+// node-id => f18_config_t[]
+extern const f18_config_t ConfigMap[8][18];
+extern const f18_symbol_t iosym[];
+
+// Convert ioreg into "dir" bits
+
+static inline uint9_t dirbits(int i, int j, uint9_t ioreg)
+{
+    uint9_t dir = ((ioreg>>4) ^ 0x5) & 0xf;
+    if (!(i & 1))
+	dir = (dir & 0xA) | ((dir & 1) << 2) | ((dir & 4) >> 2);
+    if ((j & 1))
+	dir = (dir & 0x5) | ((dir & 2) << 2) | ((dir & 8) >> 2);
+    return dir;
+}
 
 #endif
