@@ -1,42 +1,49 @@
 node 708
 org 0
 
-: send1 ( n - n) 
+: send1 ( n -- )
   @p and @p .
   1
   3
   xor !b @p .
-  0388       ( DELAY baud=460800 )
-  >r . . . 
+  \ 0x388        ( DELAY baud=460800 )
+  1000            ( TEST delay )
+  >r . . .
   unext ;
 
 : send8 ( n -- n )
   dup dup xor .    ( push 0 )
-  call:send1
+  call:send1       ( send start bit)
   @p >r . .        ( push 7 )
   7
 : loop
   dup call:send1
   2/ next:loop
-  @p . . . 
+  @p . . 
   1  ( send a ONE (stop -bit ?) )
-  call:send1 ;
+  call:send1
+  ;
 
 : send ( n -- n )
   dup dup xor .    ( push 0 )
   call:send8       ( dummy send )
-  drop call:send8
+  drop
   call:send8
   call:send8
+  call:send8
+  drop
   ;
 
 : main
   @p b!      ( set address )
   io         ( gpio )
   @p call:send  ( emit 'O' )
-  04f
+  0x4f
   @p call:send  ( emit 'K' )
-  04b
-  @p call:send  ( emit \n )
-  0b
+  0x4b
+  @p call:send  ( emit newline )
+  0x0A
+
+: hang
+  jump:hang
   ;

@@ -86,14 +86,14 @@ static uint18_t select_dirs(node_t* np, uint18_t ioreg)
 
 int f18_chan_write(chan_t* chan, uint18_t dir, uint18_t value)
 {
+    int found;
     dir = invert_dir[dir];
-    // printf("f18_chan_write: value=%d to [%03d] dir=%d\n",
-    // value, chan_to_reg_node(chan)->n.id, dir);
-    
+
     pthread_mutex_lock(&chan->lock);
-    
+
     if (chan->rmask & DIR_BIT(dir)) {
 	// Reader is waiting for data from our direction - deliver!
+	//fprintf(stderr, "  chan_write: deliver value=%d to chan, rmask was %x\n", value, chan->rmask);
 	chan->data = value;
 	chan->rmask = 0;          // first writer wins, clear all
 	chan->completed = 1;
@@ -101,29 +101,34 @@ int f18_chan_write(chan_t* chan, uint18_t dir, uint18_t value)
 	pthread_mutex_unlock(&chan->lock);
 	return 1;
     }
+    found = chan->rmask;
     pthread_mutex_unlock(&chan->lock);
+    (void) found;
+    // fprintf(stderr, "  chan_write: no reader, rmask=%x\n", found);
     return 0;
 }
 
 int f18_chan_read(chan_t* chan, uint18_t dir, uint18_t* value_ptr)
 {
+    int found;
     dir = invert_dir[dir];
 
-//    printf("f18_chan_read: from [%03d] dir=%d\n",
-//	   chan_to_reg_node(chan)->n.id, dir);
-    
     pthread_mutex_lock(&chan->lock);
-    
+
     if (chan->wmask & DIR_BIT(dir)) {
 	// Writer is waiting to send in our direction - grab data!
 	*value_ptr = chan->data;
+	// fprintf(stderr, "  chan_read: got value=%d from chan, wmask was %x\n", *value_ptr, chan->wmask);
 	chan->wmask = 0;          // first reader wins, clear all
 	chan->completed = 1;
 	pthread_cond_signal(&chan->cond);
 	pthread_mutex_unlock(&chan->lock);
 	return 1;
     }
+    found = chan->wmask;
     pthread_mutex_unlock(&chan->lock);
+    (void) found;
+    // fprintf(stderr, "  chan_read: no writer, wmask=%x\n", found);
     return 0;
 }
 
@@ -162,15 +167,19 @@ uint18_t f18_wait_transfer(chan_t* chan, int rw)
     sys_enter_blocked_port();
     pthread_mutex_lock(&chan->lock);
     chan->wait = 1;
+    // fprintf(stderr, "  wait_transfer: waiting rw=%d, rmask=%x wmask=%x\n", rw, chan->rmask, chan->wmask);
     while (!chan->completed && !chan->terminate)
 	pthread_cond_wait(&chan->cond, &chan->lock);
     chan->wait = 0;
     if (rw & READ) {
 	chan->rmask = 0;
 	value = chan->data;
+	// fprintf(stderr, "  wait_transfer: woke READ, got value=%d\n", value);
     }
-    if (rw & WRITE)
+    if (rw & WRITE) {
 	chan->wmask = 0;
+	// fprintf(stderr, "  wait_transfer: woke WRITE done\n");
+    }
     pthread_mutex_unlock(&chan->lock);
     sys_leave_blocked_port();
     return value;
@@ -191,6 +200,7 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     if ((ioreg == IOREG_IO) && (np->id == 708) &&
 	(np->rom_type == async_boot)) {
 	dirs = DIR_BIT(GPIO);
+	// fprintf(stderr, "[708] GPIO write: value=%05x\n", value);
     }
     else
 	dirs = select_dirs(np, ioreg);
@@ -375,17 +385,15 @@ void async_writer(async_writer_t* ap)
 
     set_blocking(ap->fd, 1);
 
-    while(1) {
+    while(!ap->chan.terminate) {
 	uint8_t b;
 	int i;
 	chan_t* rp = ap->in;  // like 708 gpio output
-	
-	while(count < 10) {
+
+	while((count < 10) && !ap->chan.terminate) {
 	    uint18_t value;
-	    int dir    = GPIO;
-	    
-	    // printf("async_writer: read GPIO channel from [%03d]\n",
-	    // chan_to_reg_node(rp)->n.id);
+	    int dir = GPIO;
+
 	    if (f18_chan_read(rp, dir, &value))
 		;
 	    else
@@ -396,9 +404,13 @@ void async_writer(async_writer_t* ap)
 		}
 		else {
 		    value = f18_wait_transfer(&ap->chan, READ);
+		    if (ap->chan.terminate)
+			break;
 		}
 	    }
 	    // emulate bit sending 11 = 0, 10 => 1
+	    // fprintf(stderr, "async_writer: got value=%d, count=%d\n",
+	    // value, count);
 	    if (value == 3) {
 		bits = (bits << 1) | 0;
 		count++;
@@ -407,7 +419,9 @@ void async_writer(async_writer_t* ap)
 		bits = (bits << 1) | 1;
 		count++;
 	    }
-	    // printf("async_writer: bits=%03x, count=%d\n", bits, count);
+	    else {
+		fprintf(stderr, "async_writer: unexpected value %d\n", value);
+	    }
 	}
 	// reverse bits
 	b = 0;
@@ -417,7 +431,8 @@ void async_writer(async_writer_t* ap)
 	    bits >>= 1;
 	}
 	if (ap->fd >= 0) {
-	    // printf("async_writer: wrote byte %02x\n", b);
+	    // fprintf(stderr, "async_writer: output byte %02x '%c'\n",
+	    // b, (b >= 32 && b < 127) ? b : '?');
 	    write(ap->fd, &b, 1);
 	}
 	bits = 0;

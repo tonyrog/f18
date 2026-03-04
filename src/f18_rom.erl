@@ -35,8 +35,9 @@ format_roms() ->
 format_roms(Fd) ->
     io:format(Fd, "// Generated with f18_rom:format_roms().\n", []),
     io:format(Fd, "#include \"f18.h\"\n\n", []),
-    {RomList, RomMap} = unique_roms(),
+    io:format(Fd, "#include \"f18_strings.h\"  // only once!!\n", []),
 
+    {RomList, RomMap} = unique_roms(),
     lists:foreach(
       fun({RomType,ROM}) ->
 	      format_rom_symbols(Fd, RomType),
@@ -85,9 +86,10 @@ format_rom_symbols(Fd, RomType) ->
     io:format(Fd, "const f18_symbol_t ~s_sym[] = {\n", [RomType]),
     lists:foreach(
       fun({Sym, Addr}) ->
-	      io:format(Fd, " { 0x~3.16.0b, \"~s\"},\n", [Addr,Sym])
+	      io:format(Fd, " { 0x~3.16.0b, SYMSTR(~s)},\n", 
+			[Addr,f18_strings:encode_chars(Sym)])
       end, lists:keysort(2, maps:to_list(SymMap))),
-    io:format(Fd, " { 0x3ff, (const char*) 0},\n", []),
+    io:format(Fd, " { 0x3ff, (char*) 0},\n", []),
     io:format(Fd, "};\n", []).
 
 get_node_rom_type(Node) when is_integer(Node), Node >= 000, Node =< 717 ->
@@ -132,177 +134,177 @@ rom_symbols() ->
 		  "poly" =>  16#aa}, %% 1382  polynomial approximation
       %% block 1432  analog
       analog => #{"relay" =>  16#a1, %% 1388
-		      "warm" =>  16#a9,  %% warm
-		      "*.17" =>  16#b0, %% 1390  multiply
-		      "*." =>  16#b7, %% 1396  fractional multiply
-		      "-dac" =>  16#bc, %% 1434
-		      "interp" =>  16#c4, %% 1384  interpolate
-		      "triangle" =>  16#ce, %% 1394
-		      "clc" =>  16#d3, %% 1398
-		      "--u/mod" =>  16#2d5,  %% 1398
-		      "-u/mod" =>  16#2d6, %% 1398
-		      "poly" =>  16#aa}, %% 1382  polynomial approximation
+		  "warm" =>  16#a9,  %% warm
+		  "*.17" =>  16#b0, %% 1390  multiply
+		  "*." =>  16#b7, %% 1396  fractional multiply
+		  "-dac" =>  16#bc, %% 1434
+		  "interp" =>  16#c4, %% 1384  interpolate
+		  "triangle" =>  16#ce, %% 1394
+		  "clc" =>  16#d3, %% 1398
+		  "--u/mod" =>  16#2d5,  %% 1398
+		  "-u/mod" =>  16#2d6, %% 1398
+		  "poly" =>  16#aa}, %% 1382  polynomial approximation
       %% block 1420  serdes top/bot
       serdes_boot => #{"relay" =>  16#a1, %% 1388
-			   "warm" =>  16#a9,
-			   "cold" =>  16#aa,
-			   "*.17" =>  16#b0, %% 1390  multiply
-			   "*." =>  16#b7, %% 1396  fractional multiply
-			   "taps" =>  16#bc, %% 1386
-			   "interp" =>  16#c4, %% 1384  interpolate
-			   "triangle" =>  16#ce, %% 1394
-			   "clc" =>  16#d3, %% 1398
-			   "--u/mod" =>  16#2d5,  %% 1398
-			   "-u/mod" =>  16#2d6, %% 1398
-			   "poly" =>  16#aa}, %% 1382  polynomial approximation
+		       "warm" =>  16#a9,
+		       "cold" =>  16#aa,
+		       "*.17" =>  16#b0, %% 1390  multiply
+		       "*." =>  16#b7, %% 1396  fractional multiply
+		       "taps" =>  16#bc, %% 1386
+		       "interp" =>  16#c4, %% 1384  interpolate
+		       "triangle" =>  16#ce, %% 1394
+		       "clc" =>  16#d3, %% 1398
+		       "--u/mod" =>  16#2d5,  %% 1398
+		       "-u/mod" =>  16#2d6, %% 1398
+		       "poly" =>  16#aa}, %% 1382  polynomial approximation
       %% block 1422  sync serial boot side
       sync_boot  => #{"relay" =>  16#a1, %% 1388
-			  "warm" =>  16#a9,
-			  "cold" =>  16#aa,
-			  "ser-exec" =>  16#b6,
-			  "ser-copy" =>  16#b9,
-			  "sget" =>  16#be,
-			  "6in" =>  16#c0,
-			  "2in" =>  16#c2,
-			  "*.17" =>  16#cc, %% 1390  multiply
-			  "taps" =>  16#d3, %% 1386
-			  "triangle" =>  16#db}, %% 1394
+		      "warm" =>  16#a9,
+		      "cold" =>  16#aa,
+		      "ser-exec" =>  16#b6,
+		      "ser-copy" =>  16#b9,
+		      "sget" =>  16#be,
+		      "6in" =>  16#c0,
+		      "2in" =>  16#c2,
+		      "*.17" =>  16#cc, %% 1390  multiply
+		      "taps" =>  16#d3, %% 1386
+		      "triangle" =>  16#db}, %% 1394
       %% block 1424  async serial boot top/bot
       async_boot => #{"relay" =>  16#a1, %% 1388
-			  "warm" =>  16#a9,
-			  "cold" =>  16#aa,
-			  "ser-exec" =>  16#ae,
-			  "ser-copy" =>  16#b3,
-			  "wait" =>  16#bb,
-			  "sync" =>  16#be,
-			  "start" =>  16#c5,
-			  "delay" =>  16#c8,
-			  "18ibits" =>  16#cb, %% 1426
-			  "byte" =>  16#d0, %% 1426
-			  "4bits" =>  16#d2, %% 1426
-			  "2bits" =>  16#d3, %% 1426
-			  "1bit" =>  16#d4, %% 1426
-			  "lsh" =>  16#d9, %% 1392
-			  "rsh" =>  16#db},
+		      "warm" =>  16#a9,
+		      "cold" =>  16#aa,
+		      "ser-exec" =>  16#ae,
+		      "ser-copy" =>  16#b3,
+		      "wait" =>  16#bb,
+		      "sync" =>  16#be,
+		      "start" =>  16#c5,
+		      "delay" =>  16#c8,
+		      "18ibits" =>  16#cb, %% 1426
+		      "byte" =>  16#d0, %% 1426
+		      "4bits" =>  16#d2, %% 1426
+		      "2bits" =>  16#d3, %% 1426
+		      "1bit" =>  16#d4, %% 1426
+		      "lsh" =>  16#d9, %% 1392
+		      "rsh" =>  16#db},
       %% 1392 ;???????
       %% block 1428  spi boot top/bot
       spi_boot => #{"relay" =>  16#a1, %% 1388
-			"warm" =>  16#a9,
-			"8obits" =>  16#c2,
-			"ibit" =>  16#c7,
-			"half" =>  16#ca,
-			"select" =>  16#cc,
-			"obit" =>  16#d0,
-			"rbit" =>  16#d5,
-			"18ibits" =>  16#d9,
-			%%?? ibits, u2/
-			%% block 1430
-			"cold" =>  16#aa,
-			"spi-boot" =>  16#b0,
-			"spi-exec" =>  16#b6,
-			"spi-copy" =>  16#bc},
+		    "warm" =>  16#a9,
+		    "8obits" =>  16#c2,
+		    "ibit" =>  16#c7,
+		    "half" =>  16#ca,
+		    "select" =>  16#cc,
+		    "obit" =>  16#d0,
+		    "rbit" =>  16#d5,
+		    "18ibits" =>  16#d9,
+		    %%?? ibits, u2/
+		    %% block 1430
+		    "cold" =>  16#aa,
+		    "spi-boot" =>  16#b0,
+		    "spi-exec" =>  16#b6,
+		    "spi-copy" =>  16#bc},
       %% block 1436  1-wire
       one_wire => #{"rcv" =>  16#9e,
-			"bit" =>  16#a1,
-			"warm" =>  16#a9,
-			"cold" =>  16#aa,
-			"triangle" =>  16#be, %% 1394
-			"*.17" =>  16#c3, %% 1390
-			"*." =>  16#ca, %% 1396
-			"interp" =>  16#cf, %% 1384
-			"clc" =>  16#cf, %% 1398
-			"--u/mod" =>  16#2d1,  %% 1398
-			"-u/mod" =>  16#2d2}, %% 1398 %%TODO: check
+		    "bit" =>  16#a1,
+		    "warm" =>  16#a9,
+		    "cold" =>  16#aa,
+		    "triangle" =>  16#be, %% 1394
+		    "*.17" =>  16#c3, %% 1390
+		    "*." =>  16#ca, %% 1396
+		    "interp" =>  16#cf, %% 1384
+		    "clc" =>  16#cf, %% 1398
+		    "--u/mod" =>  16#2d1,  %% 1398
+		    "-u/mod" =>  16#2d2}, %% 1398 %%TODO: check
       %% node 9 block 1320
       sdram_addr => #{"warm" =>   16#a9,
-			  "cmd" =>  16#aa},
+		      "cmd" =>  16#aa},
       %% node 8 block 1322
       sdram_control => #{"warm" =>   16#a9},
 
       %% node 7 block 1324
       sdram_data => #{"warm" =>  16#a9,
-			  "db@" =>  16#aa,
-			  "db!" =>  16#b,
-			  "inpt" =>  16#ad},
+		      "db@" =>  16#aa,
+		      "db!" =>  16#b,
+		      "inpt" =>  16#ad},
       %% node 105 block 1306
       eForth_bitsy => #{"warm" =>   16#a9,
-			    "rp--" =>  16#aa,
-			    "bs@" =>  16#ac,
-			    "'else" =>  16#ac,
-			    "rp@" =>  16#b0,
-			    "pshbs" =>  16#b1,
-			    "'r@" =>  16#b3,
-			    "@w" =>  16#b4,
-			    "rfrom" =>  16#b6,
-			    "popbs" =>  16#b9,
-			    "pshr" =>  16#bb,
-			    "rp++" =>  16#bf,
-			    "ip++" =>  16#bf,
-			    "tor" =>  16#c1,
-			    "rp!" =>  16#c4,
-			    "'con" =>  16#c7,
-			    "'var" =>  16#c8,
-			    "'exit" =>  16#c9,
-			    "bitsy" =>  16#ce,
-			    "xxt" =>  16#d0,
-			    "'ex" =>  16#d3,
-			    "'lit" =>  16#d5,
-			    "'if" =>  16#d8},
+			"rp--" =>  16#aa,
+			"bs@" =>  16#ac,
+			"'else" =>  16#ac,
+			"rp@" =>  16#b0,
+			"pshbs" =>  16#b1,
+			"'r@" =>  16#b3,
+			"@w" =>  16#b4,
+			"rfrom" =>  16#b6,
+			"popbs" =>  16#b9,
+			"pshr" =>  16#bb,
+			"rp++" =>  16#bf,
+			"ip++" =>  16#bf,
+			"tor" =>  16#c1,
+			"rp!" =>  16#c4,
+			"'con" =>  16#c7,
+			"'var" =>  16#c8,
+			"'exit" =>  16#c9,
+			"bitsy" =>  16#ce,
+			"xxt" =>  16#d0,
+			"'ex" =>  16#d3,
+			"'lit" =>  16#d5,
+			"'if" =>  16#d8},
       %%node 106 block 1310
       eForth_stack => #{"warm" =>  16#a9,
-			    "'c@" =>  16#aa,
-			    "'@" =>  16#aa,
-			    "x@" =>  16#aa,
-			    "sp++" =>  16#ac,
-			    "char+" =>  16#ac,
-			    "cell+" =>  16#ac,
-			    "1+" =>  16#ac,
-			    "popt" =>  16#ae,
-			    "sp--" =>  16#b0,
-			    "char-" =>  16#b0,
-			    "cell-" =>  16#b0,
-			    "1-" =>  16#b0,
-			    "psht" =>  16#b2,
-			    "x!" =>  16#b4,
-			    "'c!" =>  16#b6,
-			    "'!" =>  16#b6,
-			    "popts" =>  16#b7,
-			    "pops" =>  16#b8,
-			    "pshs" =>  16#ba,
-			    "page@" =>  16#bc,
-			    "pshw" =>  16#be,
-			    "page!" =>  16#c0,
-			    "sp@" =>  16#c3,
-			    "sp!" =>  16#c6,
-			    "'drop" =>  16#c8,
-			    "'over" =>  16#c9,
-			    "'dup" =>  16#ca,
-			    "'swap" =>  16#cb,
-			    "'2/" =>  16#cd,
-			    "um+" =>  16#cf,
-			    "'nc" =>  16#d2,
-			    "'cy" =>  16#d3,
-			    "zless" =>  16#d8,
-			    "'or" =>  16#db,
-			    "'xor" =>  16#dc,
-			    "'and" =>  16#dd,
-			    "negate" =>  16#de,
-			    "invert" =>  16#df,
-			    "zeq" =>  16#e0,
-			    "'+" =>  16#e2,
-			    "swap-" =>  16#e3 },
+			"'c@" =>  16#aa,
+			"'@" =>  16#aa,
+			"x@" =>  16#aa,
+			"sp++" =>  16#ac,
+			"char+" =>  16#ac,
+			"cell+" =>  16#ac,
+			"1+" =>  16#ac,
+			"popt" =>  16#ae,
+			"sp--" =>  16#b0,
+			"char-" =>  16#b0,
+			"cell-" =>  16#b0,
+			"1-" =>  16#b0,
+			"psht" =>  16#b2,
+			"x!" =>  16#b4,
+			"'c!" =>  16#b6,
+			"'!" =>  16#b6,
+			"popts" =>  16#b7,
+			"pops" =>  16#b8,
+			"pshs" =>  16#ba,
+			"page@" =>  16#bc,
+			"pshw" =>  16#be,
+			"page!" =>  16#c0,
+			"sp@" =>  16#c3,
+			"sp!" =>  16#c6,
+			"'drop" =>  16#c8,
+			"'over" =>  16#c9,
+			"'dup" =>  16#ca,
+			"'swap" =>  16#cb,
+			"'2/" =>  16#cd,
+			"um+" =>  16#cf,
+			"'nc" =>  16#d2,
+			"'cy" =>  16#d3,
+			"zless" =>  16#d8,
+			"'or" =>  16#db,
+			"'xor" =>  16#dc,
+			"'and" =>  16#dd,
+			"negate" =>  16#de,
+			"invert" =>  16#df,
+			"zeq" =>  16#e0,
+			"'+" =>  16#e2,
+			"swap-" =>  16#e3 },
       %% node 107 block 1328
       sdram_mux => #{"warm" =>  16#a9,
-			 "a2rc" =>  16#aa,
-			 "row!" =>  16#af,
-			 "sd@" =>  16#bb,
-			 "sd!" =>  16#c5,  %%TODO: sd! and poll are not in dumped rom
-			 "poll" =>  16#cf},
+		     "a2rc" =>  16#aa,
+		     "row!" =>  16#af,
+		     "sd@" =>  16#bb,
+		     "sd!" =>  16#c5,  %%TODO: sd! and poll are not in dumped rom
+		     "poll" =>  16#cf},
       sdram_idle => #{"warm" =>   16#a9,
-			  "noop" =>  16#aa,
-			  "cmd" =>  16#ac,
-			  "idle" =>  16#ae,
-			  "init" =>  16#c0}
+		      "noop" =>  16#aa,
+		      "cmd" =>  16#ac,
+		      "idle" =>  16#ae,
+		      "init" =>  16#c0}
      }.
 
 rom_list() -> [

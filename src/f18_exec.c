@@ -20,8 +20,11 @@
 #include "f18.h"
 #include "f18_scan.h"
 #include "f18_node.h"
+#include "f18_debug.h"
+#include "f18_tui.h"
 
 #define MAX_SCAN_HEAP_SIZE 256 // symbols table & names
+#define MAX_LINE_LEN 80
 
 extern int open_pty(char* name, size_t max_namelen);
 
@@ -46,7 +49,8 @@ static struct termios tty_rmode;
 static size_t  g_page_size = 0;
 static uint18_t g_flags = 0;
 static uint18_t g_id    = 999;
-static uint32_t g_v = 1, g_h = 1;
+uint32_t g_v = 1, g_h = 1;  // Non-static for TUI access
+static char* g_step_spec = NULL;  // -I step node specification
 
 // System thread state tracking (atomics for counters, mutex/cond for wait)
 static _Atomic int num_active = 0;
@@ -228,6 +232,7 @@ void usage(char* prog)
 	    "    -v               Enable verbose   (if debug compiled)\n"
 	    "    -t               Enable trace     (if debug compiled)\n"
 	    "    -i               Interactive\n"
+	    "    -n               No execute, just load, dump etx\n"
 	    "    -I               id of node to dump, 888 for map\n"    
 	    "    -D <comma-list>  Dump data and registers\n"
 	    "       reg           registers\n"
@@ -349,23 +354,6 @@ void draw_com_map()
     }
 }
 
-//
-//  Start F18 emulator
-//  -v               Verbose       (if debug compiled)
-//  -t               Trace         (if debug comipled)
-//  -i               Interactive
-//  -D <comma-list>  Dump data and registers
-//     reg           registers
-//     ram           RAM
-//     rom           ROM
-//     rs            return stack
-//     ds            data stack
-//  -d delay         Set delay between instructions
-//  -l VxH           processor layout (max 8x18)
-//  -f file          Load code from file.
-//
-
-
 int main(int argc, char** argv)
 {
     int fd;
@@ -381,27 +369,20 @@ int main(int argc, char** argv)
     char* filename = NULL;
     int file_fd = -1;
     uint18_t id = 999;
+    int noexec = 0;
     
     g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
     g_flags = 0;
     
-    while((c = getopt(argc, argv, "ivtl:d:I:D:f:")) != -1) {
+    while((c = getopt(argc, argv, "ivtnl:d:I:D:f:G")) != -1) {
 	switch(c) {
-	case 'i':
-	    interactive = 1;
-	    break;
-	case 'f':
-	    filename = optarg;
-	    break;
-	case 'v':
-	    g_flags |= FLAG_VERBOSE;
-	    break;
-	case 't':
-	    g_flags |= FLAG_TRACE;
-	    break;
-	case 'l':
-	    opt_layout = optarg;
-	    break;
+	case 'i': interactive = 1; break;
+	case 'n': noexec = 1; break;
+	case 'f': filename = optarg; break;
+	case 'v': g_flags |= FLAG_VERBOSE; break;
+	case 't': g_flags |= FLAG_TRACE; break;
+	case 'l': opt_layout = optarg; break;
+	case 'G': g_flags |= FLAG_DEBUG_ENABLE; break;
 	case 'd': {
 	    char* endptr = NULL;
 	    if ((delay = strtol(optarg, &endptr,0)) == 0) {
@@ -412,6 +393,7 @@ int main(int argc, char** argv)
 	}
 	case 'I':
 	    id = atoi(optarg);
+	    g_step_spec = optarg;  // Also save for debugger step nodes
 	    break;
 	case 'D': {
 	    char* ptr = optarg;
@@ -566,9 +548,9 @@ int main(int argc, char** argv)
 		    exit(1);
 		}
 		printf("PTY_NAME=%s\n", pty_name);
-		
+
 		r708.fd = fd;
-		w708.fd = fd;
+		w708.fd = STDOUT_FILENO;  // Write to stdout for testing
 	    }
 
 	    np->dmask = 0;
@@ -609,35 +591,28 @@ int main(int argc, char** argv)
     if (file_fd >= 0) {
 	uint18_t nid = 0xfff;
 	uint18_t addr = 0;
-	uint18_t data = 0;
 	node_t* np = NULL;
 	f18_symbol_table_t symtab;
 	uint8_t heap[MAX_SCAN_HEAP_SIZE];
 	int line = 0;
+	char linebuf[MAX_LINE_LEN+1];
 	int r;
 
-	symtab.symbol = (f18_symbol_t*) heap;
-	symtab.next   =  (f18_symbol_t*) heap;
-	symtab.hp     = heap;
-	symtab.heap   = heap;
-	symtab.nptr   = (char*)heap + MAX_SCAN_HEAP_SIZE;
-	symtab.heap_size = MAX_SCAN_HEAP_SIZE;
+	// temporary symbol table memory used while loading node
+	INIT_SYMTAB(&symtab, heap, MAX_SCAN_HEAP_SIZE);
 
-	while((r = f18_scan_line(file_fd, &line, &addr, &nid, &data, &symtab)) >= 0) {
-	    // printf("exec: r=%d\n", r);	    
+	while((r = f18_scan_line(file_fd,&line,linebuf,sizeof(linebuf),
+				 &addr, &nid, np->ram, &symtab)) >= 0) {
 	    switch(r) {
 	    case META_NODE:
 		if (np != NULL) { // find main in symtab
-		    if ((i = find_symbol("main", &symtab)) >= 0)
+		    if ((i = find_symbol_by_name("main", &symtab)) >= 0)
 			np->reg.p = symtab.symbol[i].value;
-		    printf("set p = %03x\n", np->reg.p);		    
+		    // printf("set p = %03x\n", np->reg.p);
+		    np->symtab = copy_symbols(&symtab);
 		}
-		// printf("load: node=%03d\n", nid);
-		// reset symbol table? keep?
-		symtab.symbol = (f18_symbol_t*) heap;
-		symtab.next   =  (f18_symbol_t*) heap;
-		symtab.hp     = symtab.heap;
-		symtab.nptr   = (char*)heap + symtab.heap_size;
+		// reinitialize
+		INIT_SYMTAB(&symtab, heap, MAX_SCAN_HEAP_SIZE);
 		np = node[ID_TO_ROW(nid)][ID_TO_COLUMN(nid)];
 		addr = 0;
 		break;
@@ -646,17 +621,26 @@ int main(int argc, char** argv)
 		break;
 	    default:
 		// printf("load: %03d ram[%03x]=%06x\n", nid, addr, data);
-		if (np != NULL) {
-		    np->ram[addr & 0x3f] = data;
-		    addr++;
-		}
+		addr++;
+	    }
+	}
+	if (r < 0) {
+	    switch(r) {
+	    case -1:
+		fprintf(stderr, "%s:%d: syntax error: %s\n",
+			filename, line, linebuf);
+		break;
+	    case -2:
+	    case -3:
+		break;
 	    }
 	}
 	if (np != NULL) { // find main in symtab
-	    if ((i = find_symbol("main", &symtab)) >= 0) {
+	    if ((i = find_symbol_by_name("main", &symtab)) >= 0) {
 		np->reg.p = symtab.symbol[i].value;
-		printf("set p = %03x\n", np->reg.p);
+		// printf("set p = %03x\n", np->reg.p);
 	    }
+	    np->symtab = copy_symbols(&symtab);
 	}
     }
 
@@ -688,7 +672,7 @@ int main(int argc, char** argv)
 	}
     }
 
-    if (id != 0x3ff) {
+    if (id != 999) {
 	int i = ID_TO_ROW(id);
 	int j = ID_TO_COLUMN(id);
 	reg_node_t* np = (reg_node_t*) node[i][j];
@@ -715,28 +699,48 @@ int main(int argc, char** argv)
 	    f18_disasm(np->n.ram, NULL, RAM_START, (RAM_END-RAM_START)+1);
 	}
     }
-    
-    // shoule we start io before processes? lets try
+    if (noexec)
+	exit(0);
 
-    pthread_attr_init(&r708.attr);
-    pthread_attr_setstacksize(&r708.attr, PAGE(STACK_SIZE));
-    if (pthread_create(&r708.thread,&r708.attr,async_reader_start,
-		       (void*) &r708) <0) {
-	perror("pthread_create"); 
-	exit(1);
+    // Initialize debugger if -G flag set
+    if (g_flags & FLAG_DEBUG_ENABLE) {
+	debug_init();
+	if (g_step_spec)
+	    debug_parse_step_nodes(g_step_spec);
+	// Set debugger flag on step nodes
+	for (i = 0; i < (int)v; i++) {
+	    for (j = 0; j < (int)h; j++) {
+		reg_node_t* np = (reg_node_t*) node[i][j];
+		if (debug_is_step_node(np->n.id))
+		    np->n.flags |= FLAG_DEBUG_ENABLE;
+	    }
+	}
     }
 
-    pthread_attr_init(&w708.attr);
-    pthread_attr_setstacksize(&w708.attr, PAGE(STACK_SIZE));
-    if (pthread_create(&w708.thread,&w708.attr,async_writer_start,
-		       (void*)&w708) <0) {
-	perror("pthread_create");
-	exit(1);
-    }
-    
     // Set num_active before creating threads to avoid race where main
     // thread checks the termination condition before threads have started
-    num_active = v * h;
+    // Check if node 708 exists (row 7, col 8) before including async threads
+    int has_node_708 = (v > 7 && h > 8 && node[7][8] != NULL);
+    num_active = v * h + (has_node_708 ? 2 : 0);
+
+    // Start async I/O threads only if node 708 exists
+    if (has_node_708) {
+	pthread_attr_init(&r708.attr);
+	pthread_attr_setstacksize(&r708.attr, PAGE(STACK_SIZE));
+	if (pthread_create(&r708.thread,&r708.attr,async_reader_start,
+			   (void*) &r708) <0) {
+	    perror("pthread_create");
+	    exit(1);
+	}
+
+	pthread_attr_init(&w708.attr);
+	pthread_attr_setstacksize(&w708.attr, PAGE(STACK_SIZE));
+	if (pthread_create(&w708.thread,&w708.attr,async_writer_start,
+			   (void*)&w708) <0) {
+	    perror("pthread_create");
+	    exit(1);
+	}
+    }
 
     for (i=0; i < v; i++) {
 	for (j = 0; j < h; j++) {
@@ -758,10 +762,16 @@ int main(int argc, char** argv)
     }
 
     // Wait until no threads are active and none are waiting on external I/O
-    pthread_mutex_lock(&sys_lock);
-    while (num_active > 0 || num_blocked_ext > 0)
-	pthread_cond_wait(&sys_cond, &sys_lock);
-    pthread_mutex_unlock(&sys_lock);
+    if (g_flags & FLAG_DEBUG_ENABLE) {
+	// Run debugger TUI main loop
+	// extern void debug_tui_main(void);
+	debug_tui_main();
+    } else {
+	pthread_mutex_lock(&sys_lock);
+	while (num_active > 0 || num_blocked_ext > 0)
+	    pthread_cond_wait(&sys_cond, &sys_lock);
+	pthread_mutex_unlock(&sys_lock);
+    }
 
     // Signal all nodes to terminate and wake blocked threads
     for (i = 0; i < (int)g_v; i++) {
@@ -772,15 +782,24 @@ int main(int argc, char** argv)
 	    f18_chan_terminate(&np->chan);  // signal termination
 	}
     }
-    f18_chan_terminate(&r708.chan);
-    f18_chan_terminate(&w708.chan);
+    // Terminate and join async threads only if node 708 exists
+    if (g_v > 7 && g_h > 8 && node[7][8] != NULL) {
+	f18_chan_terminate(&r708.chan);
+	f18_chan_terminate(&w708.chan);
+    }
 
     // Join all threads
     for (i = 0; i < (int)g_v; i++)
 	for (j = 0; j < (int)g_h; j++)
 	    pthread_join(((reg_node_t*)node[i][j])->thread, NULL);
-    pthread_join(r708.thread, NULL);
-    pthread_join(w708.thread, NULL);
+
+    if (g_v > 7 && g_h > 8 && node[7][8] != NULL) {
+	pthread_join(r708.thread, NULL);
+	pthread_join(w708.thread, NULL);
+    }
+
+    if (g_flags & FLAG_DEBUG_ENABLE)
+	debug_cleanup();
 
     if (tty_fd >= 0)
 	tty_reset(tty_fd);

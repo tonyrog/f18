@@ -50,19 +50,51 @@ typedef uint16_t uint10_t;  // 10 bits packed into 16 bits
 typedef uint8_t  uint5_t;   // 5 bits packed into 8 bits
 typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
 
+#define CAT_HELPER2(x,y) x ## y
+#define CAT2(x,y) CAT_HELPER2(x,y)
+
+#define SYMLEN(sym) (sym)->name[-1]
+#define SYMTYP(sym) (sym)->name[-2]
+#define SYMSTR(Name) ((char*)CAT2(SN_,Name)+2)
+
 typedef struct {
-    uint18_t    value;
-    char* name;
+    uint18_t value;
+    char* name;      // [typ][len]string:len[0]
 } f18_symbol_t;
 
 typedef struct {
+    uint9_t addr;  // patch address
+    uint8_t slot;  // 0..2 (3 can not be used)
+    uint9_t next;  // next patch address 0 = end
+} f18_symbol_patch_t;
+
+typedef struct {
+    uint8_t* heap;        // start heap memory
+    size_t   heap_size;   // total size of heap
     f18_symbol_t* symbol;
     f18_symbol_t* next;   // next slot to insert to
-    uint8_t* hp;          // heap pointer (from first up)
-    char*    nptr;        // name pointer from low heap to high
-    size_t   heap_size;   // total size of heap
-    uint8_t* heap;        // start heap memory
+    char*    dp;        // name pointer from low heap to high
 } f18_symbol_table_t;
+
+#define RESET_SYMTAB(sp) do {						\
+	(sp)->symbol = (f18_symbol_t*) ((sp)->heap);			\
+	(sp)->next   =  (f18_symbol_t*) ((sp)->heap);			\
+	(sp)->dp     = (char*)(((sp)->heap)) + (((sp)->heap_size));	\
+    } while(0)
+
+#define INIT_SYMTAB(sp, mem, memsize) do {		\
+	(sp)->heap   = (mem);				\
+	(sp)->heap_size = (memsize);			\
+	RESET_SYMTAB(sp);				\
+    } while(0)
+
+// init of fixed (const) f18_symbols array
+#define SYMTAB_INITALIZER(sarr) { 		\
+  .heap = NULL,					\
+  .heap_size = 0,				\
+  .dp = NULL,				        \
+  .symbol = (f18_symbol_t*)(sarr),		\
+  .next = ((f18_symbol_t*)(sarr))+(sizeof((sarr))/sizeof(f18_symbol_t)), }
 
 // address layout in binary
 // 000000000 - 000111111    RAM
@@ -272,6 +304,7 @@ typedef struct _node_t {
     uint18_t       ram[64];
     f18_rom_type_t rom_type;
     const uint18_t* rom;
+    f18_symbol_table_t* symtab; // loaded symbols, if present
     uint18_t       io;      // io status register (read/write)
     uint18_t       id;      // id 000 - 717 (decimal)
     useconds_t delay;       // delay between instructions
@@ -295,11 +328,11 @@ typedef struct _node_t {
 #ifdef DEBUG
 #define VERBOSE(np,fmt,...) do {			\
 	if (((node_t*)(np))->flags & FLAG_VERBOSE)			\
-	    fprintf(stdout,"[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
+	    fprintf(stderr,"[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
 #define TRACE(np,fmt, ...) do {				\
 	if (((node_t*)(np))->flags & FLAG_TRACE)			\
-	    fprintf(stdout, "[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
+	    fprintf(stderr, "[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
 #define DELAY(np) do {					\
 	if (((node_t*)(np))->delay)			\

@@ -87,14 +87,14 @@ load:
     }
     if (ptr < ptr_end) *ptr++ = ':';
     if ((i = lookup_sym(sym, I)) != -1) {
-	int l = strlen(sym[i].name);
+	int l = SYMLEN(&sym[i]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
 	memcpy(ptr, sym[i].name, m);
 	ptr += m;
     }
     else if ((i = lookup_sym(iosym, I)) != -1) {
-	int l = strlen(iosym[i].name);
+	int l = SYMLEN(&iosym[i]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
 	memcpy(ptr, iosym[i].name, m);

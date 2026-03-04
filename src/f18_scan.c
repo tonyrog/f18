@@ -5,36 +5,51 @@
 
 #include "f18_scan.h"
 
+const char SN_IO[]   =  { 'R', 2, 'i', 'o', 0 };
+const char SN_DATA[] =  { 'R', 4, 'd', 'a', 't', 'a', 0 };
+
+const char SN__D__[] =  { 'R', 4, '-', 'd', '-', '-', 0 };
+const char SN__D_U[] =  { 'R', 4, '-', 'd', '-', 'u', 0 };
+const char SN__DLU[] =  { 'R', 4, '-', 'd', 'l', 'u', 0 };
+const char SN__DL_[] =  { 'R', 4, '-', 'd', 'l', '-', 0 };
+const char SN____U[] =  { 'R', 4, '-', '-', '-', 'u', 0 };
+const char SN___LU[] =  { 'R', 4, '-', '-', 'l', 'u', 0 };
+const char SN___L_[] =  { 'R', 4, '-', '-', 'l', '-', 0 };
+
+const char SN_R___[] =  { 'R', 4, 'r', '_', '-', '-', 0 };
+const char SN_RD__[] =  { 'R', 4, 'r', 'd', '-', '-', 0 };
+const char SN_RD_U[] =  { 'R', 4, 'r', 'd', '-', 'u', 0 };
+const char SN_RDLU[] =  { 'R', 4, 'r', 'd', 'l', 'u', 0 };
+const char SN_RDL_[] =  { 'R', 4, 'r', 'd', 'l', '-', 0 };
+const char SN_R__U[] =  { 'R', 4, 'r', '-', '-', 'u', 0 };
+const char SN_R_LU[] =  { 'R', 4, 'r', '-', 'l', 'u', 0 };
+const char SN_R_L_[] =  { 'R', 4, 'r', '-', 'l', '-', 0 };
+
 // sort on address
 const f18_symbol_t iosym[] = {
-    { IOREG__D_U, "-d--u"     },
-    { IOREG__D__, "-d--"      },
-    { IOREG__DLU, "-dlu"      },
-    { IOREG__DL_, "-dl-"      },
-    { IOREG_DATA, "data"      },
-    { IOREG____U, "---u"      },
-    { IOREG_IO,   "io"        },
-    { IOREG___LU, "--lu"      },
-    { IOREG___L_, "--l-"      },    
-    { IOREG_RD_U, "rd-u"      },    
-    { IOREG_RD__, "rd--"      },
-    { IOREG_RDLU, "rdlu"      },    
-    { IOREG_RDL_, "rdl-"      },
-    { IOREG_R__U, "r--u"      },
-    { IOREG_R___, "r---"      },
-    { IOREG_R_LU, "r-lu"      },
-    { IOREG_R_L_, "r-l-"      },
+    { IOREG__D_U, SYMSTR(_D_U) },
+    { IOREG__D__, SYMSTR(_D__) },
+    { IOREG__DLU, SYMSTR(_DLU) },
+    { IOREG__DL_, SYMSTR(_DL_) },
+    { IOREG_DATA, SYMSTR(DATA) },
+    { IOREG____U, SYMSTR(___U) },
+    { IOREG_IO,   SYMSTR(IO)  },
+    { IOREG___LU, SYMSTR(__LU) },
+    { IOREG___L_, SYMSTR(__L_) },    
+    { IOREG_RD_U, SYMSTR(RD_U) },    
+    { IOREG_RD__, SYMSTR(RD__) },
+    { IOREG_RDLU, SYMSTR(RDLU) },    
+    { IOREG_RDL_, SYMSTR(RDL_) },
+    { IOREG_R__U, SYMSTR(R__U) },
+    { IOREG_R___, SYMSTR(R___) },
+    { IOREG_R_LU, SYMSTR(R_LU) },
+    { IOREG_R_L_, SYMSTR(R_L_) },
 };
 
-const f18_symbol_table_t iosym_tab  =
-{
-    (f18_symbol_t*) iosym,        // first
-    (f18_symbol_t*) iosym + 17,   // next
-    NULL, NULL,
-    0, NULL,  // no heap
-};
+const f18_symbol_table_t iosym_tab  = SYMTAB_INITALIZER(iosym);
 
-int find_symbol(char* name, f18_symbol_table_t* symtab)
+
+int find_symbol_by_name(char* name, f18_symbol_table_t* symtab)
 {
     f18_symbol_t* sp = symtab->next - 1;
     int n = symtab->next - symtab->symbol;
@@ -48,6 +63,26 @@ int find_symbol(char* name, f18_symbol_table_t* symtab)
     return -1;  // not found
 }
 
+extern uint18_t normalize_addr(uint18_t);
+
+int find_symbol_by_value(uint18_t addr, f18_symbol_table_t* symtab)
+{
+    f18_symbol_t* sp = symtab->next - 1;
+    int n = symtab->next - symtab->symbol;
+    uint18_t a;
+
+    a = normalize_addr(addr);
+
+    while(n) {
+	if (a == normalize_addr(sp->value))
+	    return n-1;
+	sp--;
+	n--;
+    }
+    return -1;
+}
+
+
 int lookup_symbol(char** pptr, f18_symbol_table_t* symtab)
 {
     char* ptr = *pptr;
@@ -55,7 +90,7 @@ int lookup_symbol(char** pptr, f18_symbol_table_t* symtab)
     int n = symtab->next - symtab->symbol;
 
     while(n) {
-	int len = strlen(sp->name);
+	int len = SYMLEN(sp);
 	if (strncmp(ptr, sp->name, len) == 0) {
 	    if ((ptr[len] == '\0') || isblank(ptr[len])) {
 		*pptr = ptr + len;
@@ -71,17 +106,109 @@ int lookup_symbol(char** pptr, f18_symbol_table_t* symtab)
 int insert_symbol(char* word, int len, f18_symbol_table_t* symtab)
 {
     f18_symbol_t* sp = symtab->next;
-    char* nptr = symtab->nptr - (len+1);
+    char* dp = symtab->dp - (len+3);  // [typ][len]<str>:len[0]
 
-    sp->name = nptr;
+    dp[0] = 'U';       // mark as unresolved
+    dp[1] = len;       // string length
+    sp->name = dp+2;   // set the name
     memcpy(sp->name, word, len);
-    sp->name[len] = '\0';
+    sp->name[len] = '\0'; // and make C-compatible
     sp->value = 0;
 
-    symtab->nptr = nptr;
+    symtab->dp = dp;
     symtab->next++;
     return sp - symtab->symbol;
 }
+
+static char* align_dp(f18_symbol_table_t* symtab)
+{
+    return (char*)(((uintptr_t)(symtab->dp+1))&~(sizeof(uintptr_t)*8-1));
+}
+
+int insert_patch(int i, int slot, uint18_t addr,  f18_symbol_table_t* symtab)
+{
+    char* dp = align_dp(symtab);
+    f18_symbol_patch_t* patch = (f18_symbol_patch_t*) dp;
+    
+    patch->addr = addr;
+    patch->slot = slot;
+    patch->next = symtab->symbol[i].value;
+    symtab->dp -= sizeof(f18_symbol_patch_t);
+    symtab->symbol[i].value = (dp - (char*) symtab->heap);
+    return 0;
+}
+
+void resolve_symbol(int i, int slot, uint18_t addr,  f18_symbol_table_t* symtab)
+{
+    f18_symbol_patch_t* patch;
+    uint9_t p;
+    
+    if ((p = symtab->symbol[i].value) == 0)  // can not be patched
+	return;
+    if (SYMTYP(&symtab->symbol[i]) != 'U')   // double check symbol type
+	return;
+    while(p != 0) {
+	patch = (f18_symbol_patch_t*) (symtab->heap + p);
+	printf("resolve_symbol: %s addr=%d  to %03x:%d\n",
+	       symtab->symbol[i].name, addr, patch->addr, patch->slot);
+	// FIXME: patch the RAM
+	p = patch->next;
+    }
+}
+
+int add_symbol(char* name, int len, int slot, uint18_t addr, f18_symbol_table_t* symtab)
+{
+    int i;
+
+    if ((i = find_symbol_by_name(name, symtab)) >= 0) {
+	if (SYMTYP(&symtab->symbol[i]) == 'U') // unresolved
+	    resolve_symbol(i, slot, addr, symtab);
+    }
+    else {
+	if ((i = insert_symbol(name, len, symtab)) >= 0) {
+	    SYMTYP(&symtab->symbol[i]) = 'R';  // resolved RAM address
+	    symtab->symbol[i].value = addr;
+	}
+    }
+    return i;
+}
+
+f18_symbol_table_t* copy_symbols(f18_symbol_table_t* src)
+{
+    int n = src->next - src->symbol;  // number of symbols;
+    int i;
+    size_t size = sizeof(f18_symbol_table_t) + n*sizeof(f18_symbol_t);
+    f18_symbol_table_t *dst;
+
+    for (i = 0; i < n; i++) {
+	f18_symbol_t* sp = &src->symbol[i];
+	size += (3 + SYMLEN(sp));
+    }
+
+    dst = (f18_symbol_table_t*) malloc(size);
+    dst->heap = ((uint8_t*)dst) + sizeof(f18_symbol_table_t);
+    dst->heap_size = size - sizeof(f18_symbol_table_t);
+    dst->dp = (char*) dst->heap + dst->heap_size;
+    dst->symbol = (f18_symbol_t*) dst->heap;
+    dst->next   = dst->symbol + n;
+    // copy symbol table
+    memcpy(dst->symbol, src->symbol, n*sizeof(f18_symbol_t));
+    // copy symbol names
+    for (i = 0; i < n; i++) {
+	f18_symbol_t* src_sp = &src->symbol[i];
+	f18_symbol_t* dst_sp = &dst->symbol[i];
+	size_t len = SYMLEN(src_sp);
+	printf("copy symbol %s L:%d T:%c Value:%05x\n",
+	       src_sp->name, SYMLEN(src_sp), SYMTYP(src_sp), src_sp->value);
+	if (SYMTYP(src_sp) == 'U')
+	    fprintf(stderr, "symbol %s is unresolved\n", src_sp->name);
+	dst->dp -= (len + 3);
+	memcpy(dst->dp, src_sp->name - 2, len+3);
+	dst_sp->name = dst->dp + 2;
+    }
+    return dst;
+}
+
 
 int parse_mnemonic(char* word, int n)
 {
@@ -102,9 +229,12 @@ int parse_mnemonic(char* word, int n)
 uint18_t encode_dest(int enc, uint18_t instr, uint18_t mask,
 		     uint18_t addr, uint18_t dest)
 {
-    if (enc)
-	return ((instr ^ IMASK) & ~mask) |
-	    (addr & ~mask) | (dest & mask);
+    if (enc) {
+	uint18_t d = ((instr^IMASK)&~mask)|(addr&~mask)|(dest&mask);
+	// printf("inst=%02x, mask=%03x, addr=%03x, dest=%03x: d=%05x\n",
+	// instr, mask, addr, dest, d);
+	return d;
+    }
     else
 	return instr | (addr & ~mask) | (dest & mask);
 }	    
@@ -118,7 +248,9 @@ uint18_t encode_dest(int enc, uint18_t instr, uint18_t mask,
 //   ( '(' .* ')' )* \<blank> .*
 //
 
-int parse_ins(char** pptr,uint18_t* insp,uint18_t* dstp,
+int parse_ins(char** pptr,uint18_t* insp,
+	      int slot, uint18_t addr,
+	      uint18_t* dstp,
 	      f18_symbol_table_t* symtab)
 {
     char* ptr = *pptr;
@@ -129,6 +261,7 @@ int parse_ins(char** pptr,uint18_t* insp,uint18_t* dstp,
     int ins;
     int want_arg = 0;
     int r = 0;
+
     
     while(r || isblank(*ptr) || (*ptr == '(')) {
 	while(isblank(*ptr)) ptr++;
@@ -192,13 +325,19 @@ dest_arg: // parse number or dest
     while (*ptr && isblank(*ptr)) ptr++;
     if ((i = lookup_symbol(&ptr,(f18_symbol_table_t*)&iosym_tab)) >= 0) {
 	value = iosym_tab.symbol[i].value;
-	// printf("%s = %03x\n", iosym_tab.symbol[i].name, value);
+	// printf("dest: %s = %03x\n", iosym_tab.symbol[i].name, value);
 	len = 1;
 	goto done;
     }
-    else if (( i = lookup_symbol(&ptr, symtab)) >= 0) {
-	value = symtab->symbol[i].value;
-	// printf("%s = %03x\n", symtab->symbol[i].name, value);
+    else if ((i = lookup_symbol(&ptr, symtab)) >= 0) {
+	if (SYMTYP(&symtab->symbol[i]) == 'R') { // unresolved
+	    value = symtab->symbol[i].value;
+	    // printf("dest: %s = %03x\n", symtab->symbol[i].name, value);
+	}	
+	else if (SYMTYP(&symtab->symbol[i]) == 'U') { // unresolved
+	    insert_patch(i, slot, addr, symtab);
+	    value = 0;
+	}
 	len = 1;
 	goto done;
     }
@@ -209,22 +348,11 @@ number_arg: 	// 0xabcd | 0b1010 | 0abcd (hex) | 123 (dec)
 	ptr += 2;
 	goto hex;
     }
-    if ((ptr[0] == '0') && (ptr[1] == 'b')) {
-	ptr += 2;
-	goto bin;
-    }
     if (ptr[0] =='0')
 	goto hex;
 // dec:   
     while(isdigit(*ptr)) {
 	value = value*10 + (*ptr-'0');
-	ptr++;
-	len++;
-    }
-    goto done;
-bin:
-    while((ptr[0] == '0') || (ptr[0] == '1')) {
-	value = (value << 1) + (*ptr - '0');
 	ptr++;
 	len++;
     }
@@ -242,6 +370,14 @@ hex:
     }
     goto done;
 done:
+    if (want_arg && (len == 0)) {
+	char* name = ptr;
+	int i;
+	while(*ptr && !isblank(*ptr)) { len++; ptr++; }
+	if ((i = insert_symbol(name, len, symtab)) >= 0) {
+	    insert_patch(i, slot, addr, symtab);
+	}
+    }
     *pptr = ptr;
     if (ins >= 0) {
 	*insp = ins;
@@ -266,38 +402,49 @@ done:
 //
 int f18_scan_line(int fd,
 		  int* line_ptr,
+		  char* line_buf,
+		  size_t line_buf_size,
 		  uint18_t* addr_ptr,uint18_t* node_ptr,
-		  uint18_t* data_ptr, f18_symbol_table_t* symtab)
+		  uint18_t* mem_ptr, f18_symbol_table_t* symtab)
 {
     int i, r;
     char* ptr;
     uint18_t dest;    
-    char buf[256];
     uint18_t ins = 0;
     uint18_t insx;
     int enc = 1;
-    
+    int slot = 0;
+    uint18_t addr = *addr_ptr & MASK6;
 again:
     i = 0;
-    while(i < (sizeof(buf)-1)) {
-	r = read(fd, &buf[i], 1);
-	if (r == 0) {     // input stream has closed
+    line_buf[0] = '\0';
+    while(i < line_buf_size-1) {
+	r = read(fd, &line_buf[i], 1);
+	// printf("buf[%d]=%c, r = %d\n", i, buf[i], r);
+	if (r == 0) {     // end of file
+	    if (i > 0) { // we have content
+		break;
+	    }
+	    line_buf[i] = '\0';	    
 	    if (fd == 0)  // it was stdin !
 		return -2;
 	    return -3;
 	}
-	else if (r < 0)
+	else if (r < 0) {
+	    line_buf[i] = '\0';	    
 	    return -1;
-	else if (buf[i] == '\n') {
+	}
+	else if (line_buf[i] == '\n') {
 	    (*line_ptr)++;
 	    break;
 	}
 	i++;
     }
-    buf[i] = '\0';
-    ptr = buf;
-    // printf("LINE: %d: %s\n", *line_ptr, buf);
-    i = parse_ins(&ptr, &insx, &dest, symtab);
+    line_buf[i] = '\0';
+    ptr = line_buf;
+    // printf("LINE: %d: %s\n", *line_ptr, line_buf);
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
+    // printf("i = %d, insx=%03x, dest=%05x\n", i, insx, dest);
     switch(i) {
     case TOKEN_EMPTY:
 	goto again;
@@ -312,14 +459,15 @@ again:
 	    while(*ptr && isblank(*ptr)) ptr++;
 	    name = ptr;
 	    while(*ptr && !isblank(*ptr)) { len++; ptr++; }
-	    if ((i = insert_symbol(name, len, symtab)) >= 0) {
-		symtab->symbol[i].value = *addr_ptr;
-		// printf("WORD [%s] = %03x\n", symtab->symbol[i].name, symtab->symbol[i].value);
-	    }
+	    if (add_symbol(name, len, slot, addr, symtab) < 0)
+		printf("warning: could not add symbol %-*s to symtab\n",
+		       len, name);
 	    goto again;
 	}
-	if (insx == META_ORG)
+	if (insx == META_ORG) {
 	    *addr_ptr = dest;
+	    addr = dest & MASK6;
+	}
 	else if (insx == META_NODE) {
 	    // 000 - 717
 	    if ( ((dest / 100) > 7) ||
@@ -330,20 +478,21 @@ again:
 	else {
 	    // printf("[%s:%03x]", f18_ins_name[insx], dest);
 	    ins |= (insx << 13);
-	    *data_ptr = encode_dest(enc, ins, MASK13, *addr_ptr, dest);
+	    mem_ptr[addr] = encode_dest(enc, ins, MASK13, addr, dest);
 	}
 	return insx;
     case  TOKEN_VALUE:
-	*data_ptr = (insx & MASK18); // value not encoded
+	mem_ptr[addr] = (insx & MASK18); // value not encoded
 	return META_VALUE;
     default:
 	return -1;
     }
-    i = parse_ins(&ptr, &insx, &dest, symtab);
+    slot++;
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
     switch(i) {
     case TOKEN_EMPTY: // assume rest of opcode are nops (warn?)
 	ins = (ins | (INS_NOP<<8) | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
-	*data_ptr = ins;
+	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
 	// printf("[%s]", f18_ins_name[insx]);	
@@ -353,16 +502,17 @@ again:
 	if (insx >= 0x20) return -1;
 	// printf("[%s:%03x]", f18_ins_name[insx], dest);
 	ins |= (insx<<8);
-	*data_ptr = encode_dest(enc, ins, MASK8, *addr_ptr, dest);
+	mem_ptr[addr] = encode_dest(enc, ins, MASK8, addr, dest);
 	return insx;
     default:
 	return -1;
     }
-    i = parse_ins(&ptr, &insx, &dest, symtab);
+    slot++;
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
     switch(i) {
     case TOKEN_EMPTY:
 	ins = (ins | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
-	*data_ptr = ins;
+	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
 	// printf("[%s]", f18_ins_name[insx]);	
@@ -372,16 +522,17 @@ again:
 	if (insx >= 0x20) return -1;
 	// printf("[%s:%03x]", f18_ins_name[insx], dest);
 	ins |= (insx<<3);
-	*data_ptr = encode_dest(enc, ins, MASK3, *addr_ptr, dest);
+	mem_ptr[addr] = encode_dest(enc, ins, MASK3, addr, dest);
 	return insx;
     default:
 	return -1;
     }
-    i = parse_ins(&ptr, &insx, &dest, symtab);
+    slot++;
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
     switch(i) {
     case TOKEN_EMPTY:
 	ins = (ins | (INS_NOP>>2)) ^ IMASK;
-	*data_ptr = ins;
+	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
 	if ((insx & 3) != 0) {
@@ -391,7 +542,7 @@ again:
 	}
 	// printf("[%s]", f18_ins_name[insx]);		
 	ins = (ins | (insx >> 2)) ^ IMASK; // add op and encode
-	*data_ptr = ins;
+	mem_ptr[addr] = ins;
 	return insx;
     default:
 	return -1;

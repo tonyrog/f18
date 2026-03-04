@@ -3,6 +3,7 @@
 
 // reg_node serdes_node analog_node
 #include "f18.h"
+#include "f18_debug.h"
 
 // Randvous state 
 typedef struct {
@@ -20,14 +21,16 @@ typedef struct {
 
 typedef struct {
     node_t    n;         // "inheritance" do not move
-    chan_t chan;         // we can reach reg_node_t from chan! 
-    
+    chan_t chan;         // we can reach reg_node_t from chan!
+
     pthread_t thread;
     pthread_attr_t attr;
 
     uint18_t dmask;    // DIR_BIT(x) available directions
     uint18_t imask;    // DIR_BIT(x) io_addr direction
     chan_t* neighbour[5];   // neighbour channels
+
+    node_debug_t debug;    // debugger state for this node
 } reg_node_t;
 
 // used to debug channel stuff
