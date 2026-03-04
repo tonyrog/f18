@@ -1,6 +1,8 @@
 %% 
 -module(f18_rom).
 
+-export([format_roms/0]).
+
 -compile(export_all).
 
 -define(ROM_VERSION, "1.2").
@@ -67,7 +69,7 @@ format_roms(Fd) ->
 	      io:format(Fd, "},\n", [])
       end, lists:seq(0,7)),
     io:format(Fd, "};\n\n", []),
-    io:format(Fd, "const f18_symbol_t* SymMap[8][18] = {\n", []),
+    io:format(Fd, "const f18_symbol_table_t* SymTabMap[8][18] = {\n", []),
     lists:foreach(
       fun(I) ->
 	      io:format(Fd, "  {", []),
@@ -75,11 +77,11 @@ format_roms(Fd) ->
 		fun(J) ->
 			Index = I*100+J,
 			{_,RomType} = lists:keyfind(Index, 1, RomList),
-			io:format(Fd, "~s_sym,", [RomType])
+			io:format(Fd, "&~s_symtab,", [RomType])
 		end, lists:seq(0,17)),
 	      io:format(Fd, "},\n", [])
       end, lists:seq(0,7)),
-    io:format(Fd, "};\n", []).
+    io:format(Fd, "};\n\n", []).
     
 format_rom_symbols(Fd, RomType) ->
     SymMap = maps:get(RomType, rom_symbols()),
@@ -89,8 +91,9 @@ format_rom_symbols(Fd, RomType) ->
 	      io:format(Fd, " { 0x~3.16.0b, SYMSTR(~s)},\n", 
 			[Addr,f18_strings:encode_chars(Sym)])
       end, lists:keysort(2, maps:to_list(SymMap))),
-    io:format(Fd, " { 0x3ff, (char*) 0},\n", []),
-    io:format(Fd, "};\n", []).
+    io:format(Fd, "};\n", []),
+    io:format(Fd, "const f18_symbol_table_t ~s_symtab  = SYMTAB_INITALIZER(~s_sym);\n", [RomType, RomType]),
+    ok.
 
 get_node_rom_type(Node) when is_integer(Node), Node >= 000, Node =< 717 ->
     maps:get(Node, node_rom_types(), basic).

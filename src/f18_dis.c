@@ -8,6 +8,8 @@
 #define dec(d) ((d)+'0')
 #define hex(d) (((d)<10) ? ((d)+'0') : (((d)-10)+'a'))
 
+extern int find_symbol_by_value(uint18_t addr, const f18_symbol_table_t* symtab);
+
 // wrap addresses into regular ROM/RAM/IO addresses
 uint18_t normalize_addr(uint18_t addr)
 {
@@ -43,7 +45,8 @@ int lookup_sym(const f18_symbol_t* sym, uint18_t addr)
 //  <<slot0:5>> <<slot1:5> <<<slot2:5> <<slot3:3>>
 // 
 
-int f18_disasm_instruction(uint18_t addr, uint18_t I, const f18_symbol_t* sym,
+int f18_disasm_instruction(uint18_t addr, uint18_t I,
+			   const f18_symbol_table_t* symtab,
 			   char* ptr, size_t maxlen)
 {
     char* ptr0 = ptr;
@@ -56,7 +59,7 @@ int f18_disasm_instruction(uint18_t addr, uint18_t I, const f18_symbol_t* sym,
     I <<= 2;
     for (i = 0; i < 4; i++) {
 	uint5_t ins = (I >> 15) & 0x1f;
-	const char* ins_name = f18_ins_name[ins];
+	const char* ins_name = f18_ins[ins].name;
 	int l = strlen(ins_name);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
@@ -86,18 +89,18 @@ load:
     case 2: I = (addr & ~MASK3)  | ((I0 ^ IMASK) & MASK3); break;
     }
     if (ptr < ptr_end) *ptr++ = ':';
-    if ((i = lookup_sym(sym, I)) != -1) {
-	int l = SYMLEN(&sym[i]);
+    if ((i = find_symbol_by_value(I, symtab)) != -1) {
+	int l = SYMLEN(&symtab->symbol[i]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
-	memcpy(ptr, sym[i].name, m);
+	memcpy(ptr, symtab->symbol[i].name, m);
 	ptr += m;
     }
-    else if ((i = lookup_sym(iosym, I)) != -1) {
-	int l = SYMLEN(&iosym[i]);
+    else if ((i = find_symbol_by_value(I, &io_symtab)) != -1) {
+	int l = SYMLEN(&io_symtab.symbol[i]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
-	memcpy(ptr, iosym[i].name, m);
+	memcpy(ptr, io_symtab.symbol[i].name, m);
 	ptr += m;
     }    
     else { // decimal. configure? 3, 8, 10-bit
@@ -126,7 +129,7 @@ done:
     return ptr - ptr0;    
 }
 
-void f18_disasm(const uint18_t* insp, const f18_symbol_t* sym,
+void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
 		uint18_t addr, size_t n)
 {
     while(n--) {
@@ -134,9 +137,10 @@ void f18_disasm(const uint18_t* insp, const f18_symbol_t* sym,
 	uint32_t val = *insp++ ^ IMASK;
 	int i = 0;
 
-	f18_disasm_instruction(addr+1, val, sym, ins_buf, sizeof(ins_buf));
-	if ((i = lookup_sym(sym, addr)) != -1) {
-	    fprintf(stdout, "%s%s:\n", sym[i].name,(addr & 0x200)?".p":"");
+	f18_disasm_instruction(addr+1, val, symtab, ins_buf, sizeof(ins_buf));
+	if ((i = find_symbol_by_value(addr, symtab)) != -1) {
+	    fprintf(stdout, "%s%s:\n", symtab->symbol[i].name,
+		    (addr & 0x200)?".p":"");
 	}
 	fprintf(stdout, "%03x: %05x: %s\n", addr, val, ins_buf);
 	addr++;

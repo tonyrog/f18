@@ -1,20 +1,60 @@
- //
- //  Simple F18 emulator
- //
- #include "f18.h"
- #include "f18_debug.h"
- #include "f18_node.h"
+//
+//  Simple F18 emulator
+//
+#include "f18.h"
+#include "f18_debug.h"
+#include "f18_node.h"
+#include "f18_strings.h"
 
- const char* f18_ins_name[32] = {
-     ";",     "ex",   "jump", "call",
-     "unext", "next", "if",   "-if",
-     "@p",    "@+",   "@b",   "@",
-     "!p",    "!+",   "!b",   "!",
-     "+*",    "2*",   "2/",   "inv",
-     "+",     "and",  "xor",   "drop",
-     "dup",   "r>",  "over", "a",
-     ".",     ">r", "b!",   "a!"
- };
+/*
+const char* f18_ins_name[32] = {
+    ";",     "ex",   "jump", "call",
+    "unext", "next", "if",   "-if",
+    "@p",    "@+",   "@b",   "@",
+    "!p",    "!+",   "!b",   "!",
+    "+*",    "2*",   "2/",   "inv",
+    "+",     "and",  "xor",   "drop",
+    "dup",   "r>",  "over", "a",
+    ".",     ">r", "b!",   "a!"
+};
+*/
+const f18_symbol_t f18_ins[32] = {
+    { 0x00,    SYMSTR(SEMI) },      // slot 3
+    { 0x01,    SYMSTR(ex) },
+    { 0x02,    SYMSTR(jump) },
+    { 0x03,    SYMSTR(call)},
+    { 0x04,   SYMSTR(unext)},  // slot 3
+    { 0x05,   SYMSTR(next)},
+    { 0x06,   SYMSTR(if)},
+    { 0x07,   SYMSTR(DASH_if)},
+    { 0x08,   SYMSTR(AT_p)},     // slot 3
+    { 0x09,   SYMSTR(AT_PLUS)},
+    { 0x0a,   SYMSTR(AT_b)},
+    { 0x0b,   SYMSTR(AT)},
+    { 0x0c,   SYMSTR(BANG_p)},     // slot 3
+    { 0x0d,   SYMSTR(BANG_PLUS)},
+    { 0x0e,   SYMSTR(BANG_b)},
+    { 0x0f,   SYMSTR(BANG)},
+    { 0x10,   SYMSTR(PLUS_STAR)},     // slot 3 (need wait)
+    { 0x11,   SYMSTR(2_STAR)},
+    { 0x12,   SYMSTR(2_SLASH)},
+    { 0x13,   SYMSTR(inv)},
+    { 0x14,   SYMSTR(PLUS)},     // slot 3 (need wait)
+    { 0x15,   SYMSTR(and)},
+    { 0x16,   SYMSTR(xor)},
+    { 0x17,   SYMSTR(drop)},
+    { 0x18,   SYMSTR(dup)},   // slot 3
+    { 0x19,   SYMSTR(r_GT)},
+    { 0x1a,   SYMSTR(over)},
+    { 0x1b,   SYMSTR(a)},
+    { 0x1c,   SYMSTR(DOT)},     // slot 3
+    { 0x1d,   SYMSTR(GT_r)},
+    { 0x1e,   SYMSTR(b_BANG)},
+    { 0x1f,   SYMSTR(a_BANG)}
+};
+
+const f18_symbol_table_t f18_inst_symtab = SYMTAB_INITALIZER(f18_ins);
+
 
  #define CHECK_DS_OVERFLOW(np) check_overflow((np),SP, 8,  "data stack"),
  #define CHECK_DS_UNDERFLOW(np) check_underflow((np),SP, 0, "data stack"),
@@ -127,7 +167,7 @@
  {
      int i = ID_TO_ROW(np->id);
      int j = ID_TO_COLUMN(np->id);
-     f18_disasm(np->rom, SymMap[i][j], ROM_START, 64);
+     f18_disasm(np->rom, SymTabMap[i][j], ROM_START, 64);
  }
 
  static void dump_ds(node_t* np)
@@ -267,7 +307,7 @@
      }
 
      TRACE(np, "%03x: T=%05x,S=%05x,R=%05x,SP=%d,RP=%d, execute %s\n",
-	   P0, T,S,R,SP,RP, f18_ins_name[(II >> 15) & MASK5]);
+	   P0, T,S,R,SP,RP, f18_ins[(II >> 15) & MASK5].name);
      DELAY(np);
 
      switch((II >> 15) & MASK5) {

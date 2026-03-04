@@ -329,18 +329,18 @@ static int decode_instruction(node_t* np, uint18_t addr, uint18_t word,
 	    }
             dests[s] = dest;
 	    if ((i = find_symbol_by_value(dest, np->symtab)) >= 0)
-		snprintf(slots[s], 16, "%s:%s", f18_ins_name[opcode],
+		snprintf(slots[s], 16, "%s:%s", f18_ins[opcode].name,
 			 np->symtab->symbol[i].name);
 	    else
-		snprintf(slots[s], 16, "%s:%03x", f18_ins_name[opcode], dest);
+		snprintf(slots[s], 16, "%s:%03x", f18_ins[opcode].name, dest);
             num_slots = s + 1;
             break;  // Branch ends instruction
         } else if (opcode == INS_RETURN || opcode == INS_EXECUTE) {
-            snprintf(slots[s], 16, "%s", f18_ins_name[opcode]);
+            snprintf(slots[s], 16, "%s", f18_ins[opcode].name);
             num_slots = s + 1;
             break;  // These also end instruction
         } else {
-            snprintf(slots[s], 16, "%s", f18_ins_name[opcode]);
+            snprintf(slots[s], 16, "%s", f18_ins[opcode].name);
             num_slots = s + 1;
         }
         II <<= 5;

@@ -692,11 +692,11 @@ int main(int argc, char** argv)
 	    printf("  comm=%03x\n", ConfigMap[i][j].comm);
 	    printf("  reset=%03x\n", ConfigMap[i][j].reset);
 	    
-	    f18_disasm(RomMap[rt].addr, SymMap[i][j], ROM_START,
+	    f18_disasm(RomMap[rt].addr, SymTabMap[i][j], ROM_START,
 		       RomMap[rt].size);
 	}
 	if (g_flags & FLAG_DUMP_RAM) {
-	    f18_disasm(np->n.ram, NULL, RAM_START, (RAM_END-RAM_START)+1);
+	    f18_disasm(np->n.ram, np->n.symtab, RAM_START, (RAM_END-RAM_START)+1);
 	}
     }
     if (noexec)

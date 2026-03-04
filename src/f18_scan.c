@@ -46,10 +46,10 @@ const f18_symbol_t iosym[] = {
     { IOREG_R_L_, SYMSTR(R_L_) },
 };
 
-const f18_symbol_table_t iosym_tab  = SYMTAB_INITALIZER(iosym);
+const f18_symbol_table_t io_symtab  = SYMTAB_INITALIZER(iosym);
 
 
-int find_symbol_by_name(char* name, f18_symbol_table_t* symtab)
+int find_symbol_by_name(char* name, const f18_symbol_table_t* symtab)
 {
     f18_symbol_t* sp = symtab->next - 1;
     int n = symtab->next - symtab->symbol;
@@ -65,7 +65,7 @@ int find_symbol_by_name(char* name, f18_symbol_table_t* symtab)
 
 extern uint18_t normalize_addr(uint18_t);
 
-int find_symbol_by_value(uint18_t addr, f18_symbol_table_t* symtab)
+int find_symbol_by_value(uint18_t addr, const f18_symbol_table_t* symtab)
 {
     f18_symbol_t* sp = symtab->next - 1;
     int n = symtab->next - symtab->symbol;
@@ -82,8 +82,24 @@ int find_symbol_by_value(uint18_t addr, f18_symbol_table_t* symtab)
     return -1;
 }
 
+int insert_symbol(char* word, int len, f18_symbol_table_t* symtab)
+{
+    f18_symbol_t* sp = symtab->next;
+    char* dp = symtab->dp - (len+3);  // [typ][len]<str>:len[0]
 
-int lookup_symbol(char** pptr, f18_symbol_table_t* symtab)
+    dp[0] = 'U';       // mark as unresolved
+    dp[1] = len;       // string length
+    sp->name = dp+2;   // set the name
+    memcpy(sp->name, word, len);
+    sp->name[len] = '\0'; // and make C-compatible
+    sp->value = 0;
+
+    symtab->dp = dp;
+    symtab->next++;
+    return sp - symtab->symbol;
+}
+
+int lookup_symbol(char** pptr, const f18_symbol_table_t* symtab)
 {
     char* ptr = *pptr;
     f18_symbol_t* sp = symtab->next - 1;
@@ -103,22 +119,6 @@ int lookup_symbol(char** pptr, f18_symbol_table_t* symtab)
     return -1;  // not found
 }
 
-int insert_symbol(char* word, int len, f18_symbol_table_t* symtab)
-{
-    f18_symbol_t* sp = symtab->next;
-    char* dp = symtab->dp - (len+3);  // [typ][len]<str>:len[0]
-
-    dp[0] = 'U';       // mark as unresolved
-    dp[1] = len;       // string length
-    sp->name = dp+2;   // set the name
-    memcpy(sp->name, word, len);
-    sp->name[len] = '\0'; // and make C-compatible
-    sp->value = 0;
-
-    symtab->dp = dp;
-    symtab->next++;
-    return sp - symtab->symbol;
-}
 
 static char* align_dp(f18_symbol_table_t* symtab)
 {
@@ -209,13 +209,13 @@ f18_symbol_table_t* copy_symbols(f18_symbol_table_t* src)
     return dst;
 }
 
-
 int parse_mnemonic(char* word, int n)
 {
     int i;
     for (i=0; i<32; i++) {
-	int len = strlen(f18_ins_name[i]);
-	if ((n == len) && (memcmp(word, f18_ins_name[i], n) == 0))
+	const f18_symbol_t* sp = &f18_ins[i];
+	int len = SYMLEN(sp);
+	if ((n == len) && (memcmp(word, f18_ins[i].name, n) == 0))
 	    return i;
     }
     if ((n == 3) && (memcmp(word, "org", 3) == 0))
@@ -323,9 +323,9 @@ back:
 
 dest_arg: // parse number or dest
     while (*ptr && isblank(*ptr)) ptr++;
-    if ((i = lookup_symbol(&ptr,(f18_symbol_table_t*)&iosym_tab)) >= 0) {
-	value = iosym_tab.symbol[i].value;
-	// printf("dest: %s = %03x\n", iosym_tab.symbol[i].name, value);
+    if ((i = lookup_symbol(&ptr,&io_symtab)) >= 0) {
+	value = io_symtab.symbol[i].value;
+	// printf("dest: %s = %03x\n", io_symtab.symbol[i].name, value);
 	len = 1;
 	goto done;
     }
@@ -449,7 +449,7 @@ again:
     case TOKEN_EMPTY:
 	goto again;
     case TOKEN_MNEMONIC1:
-	// printf("[%s]", f18_ins_name[insx]);
+	// printf("[%s]", f18_ins[insx].name);
 	ins = (insx << 13);
 	break;
     case TOKEN_MNEMONIC2:
@@ -476,7 +476,7 @@ again:
 	    *node_ptr = dest;
 	}
 	else {
-	    // printf("[%s:%03x]", f18_ins_name[insx], dest);
+	    // printf("[%s:%03x]", f18_ins[insx].name, dest);
 	    ins |= (insx << 13);
 	    mem_ptr[addr] = encode_dest(enc, ins, MASK13, addr, dest);
 	}
@@ -495,12 +495,12 @@ again:
 	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
-	// printf("[%s]", f18_ins_name[insx]);	
+	// printf("[%s]", f18_ins[insx].name);	
 	ins |= (insx << 8);
 	break;
     case TOKEN_MNEMONIC2:
 	if (insx >= 0x20) return -1;
-	// printf("[%s:%03x]", f18_ins_name[insx], dest);
+	// printf("[%s:%03x]", f18_ins[insx].name, dest);
 	ins |= (insx<<8);
 	mem_ptr[addr] = encode_dest(enc, ins, MASK8, addr, dest);
 	return insx;
@@ -515,12 +515,12 @@ again:
 	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
-	// printf("[%s]", f18_ins_name[insx]);	
+	// printf("[%s]", f18_ins[insx].name);	
 	ins |= (insx << 3);
 	break;
     case TOKEN_MNEMONIC2:
 	if (insx >= 0x20) return -1;
-	// printf("[%s:%03x]", f18_ins_name[insx], dest);
+	// printf("[%s:%03x]", f18_ins[insx].name, dest);
 	ins |= (insx<<3);
 	mem_ptr[addr] = encode_dest(enc, ins, MASK3, addr, dest);
 	return insx;
@@ -537,10 +537,10 @@ again:
     case TOKEN_MNEMONIC1:
 	if ((insx & 3) != 0) {
 	    fprintf(stderr, "scan error: bad slot3 instruction used %s\n",
-		    f18_ins_name[insx]);
+		    f18_ins[insx].name);
 	    return -1;
 	}
-	// printf("[%s]", f18_ins_name[insx]);		
+	// printf("[%s]", f18_ins[insx].name);		
 	ins = (ins | (insx >> 2)) ^ IMASK; // add op and encode
 	mem_ptr[addr] = ins;
 	return insx;

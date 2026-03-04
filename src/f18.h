@@ -352,9 +352,9 @@ typedef struct _node_t {
 
 extern void f18_emu(node_t* p);
 extern int f18_disasm_instruction(uint18_t addr, uint18_t I,
-				  const f18_symbol_t* sym,
+				  const f18_symbol_table_t* symtab,
 				  char* ptr, size_t maxlen);
-extern void f18_disasm(const uint18_t* insp, const f18_symbol_t* sym,
+extern void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
 		       uint18_t addr, size_t n);
 
 
@@ -367,15 +367,20 @@ extern void sys_enter_blocked_ext(void);
 extern void sys_leave_blocked_ext(void);
 
 extern const char* f18_ins_name[32];
+extern const f18_symbol_t f18_ins[32];
+extern const f18_symbol_table_t f18_inst_symtab;
+
 // f8_rom_type_t => f18_rom_t
 extern const f18_rom_t RomMap[];
 // node-id => f8_rom_type_t
 extern const f18_rom_type_t RomTypeMap[8][18];
 // node-id => f18_symbol_t[]
-extern const f18_symbol_t* SymMap[8][18];
+// extern const f18_symbol_t* SymMap[8][18];
+extern const f18_symbol_table_t* SymTabMap[8][18];
 // node-id => f18_config_t[]
 extern const f18_config_t ConfigMap[8][18];
-extern const f18_symbol_t iosym[];
+// extern const f18_symbol_t iosym[];
+extern const f18_symbol_table_t io_symtab;
 
 // Convert ioreg into "dir" bits
 
