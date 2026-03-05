@@ -200,31 +200,36 @@ void tui_draw_title(void)
 
 void tui_draw_grid(void)
 {
+    int y, i, j;
+
     attron(COLOR_PAIR(COLOR_BORDER));
     draw_box(grid_top, grid_left, grid_height, grid_width, "Node Grid");
     attroff(COLOR_PAIR(COLOR_BORDER));
 
     // Draw column headers
-    int y = grid_top + 1;
+    y = grid_top + 1;
     mvprintw(y, grid_left + 3, "  ");
-    for (int j = 0; j < (int)g_h && j < 9; j++) {
+    for (j = 0; j < (int)g_h && j < 9; j++) {
         mvprintw(y, grid_left + 4 + j * 4, "%02d", j);
     }
 
     // Draw nodes
-    for (int i = (int)g_v - 1; i >= 0 && (g_v - 1 - i) < 8; i--) {
+    for (i = (int)g_v - 1; i >= 0 && (g_v - 1 - i) < 8; i--) {
         y = grid_top + 2 + (g_v - 1 - i);
         mvprintw(y, grid_left + 1, "%d", i);
 
-        for (int j = 0; j < (int)g_h && j < 9; j++) {
+        for (j = 0; j < (int)g_h && j < 9; j++) {
             reg_node_t* np = (reg_node_t*)node[i][j];
             int id = MAKE_ID(i, j);
             int is_focus = (id == (int)g_debugger.focus_node);
             int is_step = debug_is_step_node(id);
             int at_barrier = (np != NULL) ? np->debug.at_barrier : 0;
+            int is_blocked = (np != NULL) ? (np->debug.blocked_addr != 0) : 0;
 
             if (is_focus)
                 attron(COLOR_PAIR(COLOR_FOCUS) | A_BOLD);
+            else if (is_blocked)
+                attron(COLOR_PAIR(COLOR_BLOCKED) | A_BOLD);
             else if (is_step && at_barrier)
                 attron(COLOR_PAIR(COLOR_PAUSED));
             else if (is_step)
@@ -234,36 +239,51 @@ void tui_draw_grid(void)
                 mvprintw(y, grid_left + 3 + j * 4, "----");
             else if (is_focus)
                 mvprintw(y, grid_left + 3 + j * 4, "[>>]");
+            else if (is_blocked)
+                mvprintw(y, grid_left + 3 + j * 4, "[B%c]",
+                         np->debug.blocked_dir ? 'W' : 'R');
             else if (is_step)
                 mvprintw(y, grid_left + 3 + j * 4, "[**]");
             else
                 mvprintw(y, grid_left + 3 + j * 4, "[  ]");
 
-            attroff(COLOR_PAIR(COLOR_FOCUS) | COLOR_PAIR(COLOR_PAUSED) |
-                    COLOR_PAIR(COLOR_RUNNING) | A_BOLD);
+            attroff(COLOR_PAIR(COLOR_FOCUS) | COLOR_PAIR(COLOR_BLOCKED) |
+                    COLOR_PAIR(COLOR_PAUSED) | COLOR_PAIR(COLOR_RUNNING) | A_BOLD);
         }
     }
 
     mvprintw(grid_top + grid_height - 2, grid_left + 2,
-             "[>>]=focus [**]=step");
+             "[>>]=focus [Bx]=blocked");
 }
 
 void tui_draw_registers(node_t* np)
 {
-    attron(COLOR_PAIR(COLOR_BORDER));
+    reg_node_t* rp;
     char title[32];
+    int y;
+
+    attron(COLOR_PAIR(COLOR_BORDER));
     snprintf(title, sizeof(title), "Registers [%03d]", np ? np->id : 0);
     draw_box(reg_top, reg_left, reg_height, reg_width, title);
     attroff(COLOR_PAIR(COLOR_BORDER));
 
     if (!np) return;
 
-    int y = reg_top + 1;
+    rp = (reg_node_t*)np;
+    y = reg_top + 1;
     mvprintw(y, reg_left + 2, "P=%03x  A=%05x  B=%03x",
              np->reg.p, np->reg.a, np->reg.b);
     y++;
     mvprintw(y, reg_left + 2, "I=%05x  C=%d  SP=%d  RP=%d",
              np->reg.i, np->reg.c, np->reg.sp, np->reg.rp);
+    y++;
+    if (rp->debug.blocked_addr != 0) {
+        attron(COLOR_PAIR(COLOR_BLOCKED) | A_BOLD);
+        mvprintw(y, reg_left + 2, "BLOCKED %s IO:%03x",
+                 rp->debug.blocked_dir ? "WR" : "RD",
+                 rp->debug.blocked_addr);
+        attroff(COLOR_PAIR(COLOR_BLOCKED) | A_BOLD);
+    }
 }
 
 void tui_draw_stacks(node_t* np)

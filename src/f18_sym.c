@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "f18.h"
 #include "f18_sym.h"
 
 extern uint18_t normalize_addr(uint18_t);
@@ -102,33 +103,71 @@ int insert_patch(int i, int slot, uint18_t addr,  f18_symbol_table_t* symtab)
     return 0;
 }
 
-void resolve_symbol(int i, int slot, uint18_t addr,  f18_symbol_table_t* symtab)
+void resolve_symbol(int i, uint18_t addr, uint18_t* ram,
+		    f18_symbol_table_t* symtab)
 {
     f18_symbol_patch_t* patch;
+    uint18_t patch_addr;
+    uint18_t word;
+    uint18_t mask;
     uint9_t p;
-    
-    if ((p = symtab->symbol[i].value) == 0)  // can not be patched
+
+    p = symtab->symbol[i].value;
+    if (p == 0)  // no patches to apply
 	return;
     if (SYMTYP(&symtab->symbol[i]) != 'U')   // double check symbol type
 	return;
+
     while(p != 0) {
 	patch = (f18_symbol_patch_t*) (symtab->heap + p);
-	printf("resolve_symbol: %s addr=%d  to %03x:%d\n",
-	       symtab->symbol[i].name, addr, patch->addr, patch->slot);
-	// FIXME: patch the RAM
+	patch_addr = patch->addr & MASK6;  // RAM is 64 words
+	word = ram[patch_addr];
+
+	// Select mask based on slot (how many bits available for destination)
+	switch(patch->slot) {
+	case 0: mask = MASK10; break;  // slot 0: 10 bits
+	case 1: mask = MASK8;  break;  // slot 1: 8 bits
+	case 2: mask = MASK3;  break;  // slot 2: 3 bits
+	default: mask = 0; break;      // slot 3: no address bits
+	}
+
+	// Check if address fits in available bits
+	if ((addr & ~mask) != (patch_addr & ~mask)) {
+	    fprintf(stderr, "warning: forward ref '%s' at %03x slot %d: "
+		    "dest %03x doesn't fit in %d bits\n",
+		    symtab->symbol[i].name, patch_addr, patch->slot,
+		    addr, (patch->slot == 0) ? 10 : (patch->slot == 1) ? 8 : 3);
+	}
+
+	// Patch the instruction: clear old dest bits, set new ones
+	// Destination bits are stored raw (not XOR'd with IMASK)
+	word = (word & ~mask) | (addr & mask);
+	ram[patch_addr] = word;
+
+	printf("resolve_symbol: %s -> %03x (patched %03x slot %d)\n",
+	       symtab->symbol[i].name, addr, patch_addr, patch->slot);
+
 	p = patch->next;
     }
+
+    // Mark symbol as resolved and store the address
+    SYMTYP(&symtab->symbol[i]) = 'R';
+    symtab->symbol[i].value = addr;
 }
 
-int add_symbol(char* name, int len, int slot, uint18_t addr, f18_symbol_table_t* symtab)
+int add_symbol(char* name, int len, int slot, uint18_t addr,
+	       uint18_t* ram, f18_symbol_table_t* symtab)
 {
     int i;
+    (void)slot;  // slot is in the patch, not needed here
 
-    if ((i = find_symbol_by_name(name, symtab)) >= 0) {
-	if (SYMTYP(&symtab->symbol[i]) == 'U') // unresolved
-	    resolve_symbol(i, slot, addr, symtab);
+    if ((i = find_symbol_by_namelen(name, len, symtab)) >= 0) {
+	if (SYMTYP(&symtab->symbol[i]) == 'U') // unresolved - patch it!
+	    resolve_symbol(i, addr, ram, symtab);
+	// else: symbol already resolved, ignore redefinition
     }
     else {
+	// New symbol - add it as resolved
 	if ((i = insert_symbol(name, len, symtab)) >= 0) {
 	    SYMTYP(&symtab->symbol[i]) = 'R';  // resolved RAM address
 	    symtab->symbol[i].value = addr;

@@ -64,9 +64,11 @@ extern int insert_symbol(char* word, int len, f18_symbol_table_t* symtab);
 extern int insert_patch(int i, int slot, uint18_t addr,
 			f18_symbol_table_t* symtab);
 
-extern void resolve_symbol(int i, int slot, uint18_t addr,  f18_symbol_table_t* symtab);
+extern void resolve_symbol(int i, uint18_t addr, uint18_t* ram,
+			   f18_symbol_table_t* symtab);
 
-extern int add_symbol(char* name, int len, int slot, uint18_t addr, f18_symbol_table_t* symtab);
+extern int add_symbol(char* name, int len, int slot, uint18_t addr,
+		      uint18_t* ram, f18_symbol_table_t* symtab);
 
 extern f18_symbol_table_t* copy_symbols(f18_symbol_table_t* src);
 

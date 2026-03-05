@@ -108,6 +108,8 @@ typedef struct {
     uint64_t         instruction_count;
     uint18_t         last_pc;          // Previous PC (for step-over)
     int              call_depth;       // Track call nesting for step-over
+    uint18_t         blocked_addr;     // IO address we're blocked on (if blocked)
+    int              blocked_dir;      // 0=read, 1=write
 } node_debug_t;
 
 // Global debugger instance

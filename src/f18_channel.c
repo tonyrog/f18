@@ -22,6 +22,7 @@
 #include "f18.h"
 #include "f18_scan.h"
 #include "f18_node.h"
+#include "f18_debug.h"
 
 extern node_t* node[8][18];
 
@@ -235,7 +236,10 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     }
 
     // Phase 3: wait for a reader to find us and complete the transfer
+    dp->debug.blocked_addr = ioreg;
+    dp->debug.blocked_dir = 1;  // write
     f18_wait_transfer(&dp->chan, WRITE);
+    dp->debug.blocked_addr = 0;
 }
 
 uint18_t read_status(reg_node_t* dp)
@@ -320,7 +324,10 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	}
     }
 
+    dp->debug.blocked_addr = ioreg;
+    dp->debug.blocked_dir = 0;  // read
     value = f18_wait_transfer(&dp->chan, READ);
+    dp->debug.blocked_addr = 0;
 
     if (np->flags & FLAG_TERMINATE)
 	return 0;

@@ -162,6 +162,8 @@ int debug_pre_instruction(void* vp)
 {
     reg_node_t* rp = (reg_node_t*)vp;
     node_t* np = &rp->n;
+    uint18_t pc;
+    int should_quit;
 
     if (!g_debugger.enabled)
         return 0;
@@ -172,7 +174,7 @@ int debug_pre_instruction(void* vp)
     pthread_mutex_lock(&g_debugger.barrier_lock);
 
     // At instruction boundary, update PC and fetch instruction word for display
-    uint18_t pc = np->reg.p & MASK9;
+    pc = np->reg.p & MASK9;
     g_debugger.current_slot = 0;
     g_debugger.current_pc = pc;
 
@@ -190,9 +192,14 @@ int debug_pre_instruction(void* vp)
         g_debugger.mode = DBG_MODE_PAUSE;
     }
 
+    // In STEP_INST mode with step_count exhausted, switch to PAUSE
+    if (g_debugger.mode == DBG_MODE_STEP_INST && g_debugger.step_count == 0) {
+        g_debugger.mode = DBG_MODE_PAUSE;
+    }
+
     // In PAUSE mode, wait at barrier
     // STEP_SLOT passes through here to stop at slot barriers instead
-    // STEP_INST/STEP_OVER wait here to count instruction words
+    // STEP_INST/STEP_OVER: decrement count and let instruction execute
     if (g_debugger.mode == DBG_MODE_PAUSE ||
         g_debugger.mode == DBG_MODE_STEP_INST ||
         g_debugger.mode == DBG_MODE_STEP_OVER) {
@@ -213,20 +220,19 @@ int debug_pre_instruction(void* vp)
         rp->debug.at_barrier = 0;
         rp->debug.state = DBG_NODE_STEP;
 
-        // Decrement step count if stepping instructions
+        // Decrement step count - but DON'T change mode yet!
+        // The instruction must execute first (slot barriers check mode)
         if (g_debugger.mode == DBG_MODE_STEP_INST) {
             if (g_debugger.step_count > 0) {
                 g_debugger.step_count--;
-                if (g_debugger.step_count == 0) {
-                    g_debugger.mode = DBG_MODE_PAUSE;
-                    g_debugger.barrier_release = 0;
-                }
             }
+            // Mode stays STEP_INST so slot barriers pass through
+            // At NEXT instruction boundary, step_count==0 will trigger PAUSE
         }
-        // For STEP_SLOT, don't reset barrier_release here - let slot barrier handle it
+        // For STEP_SLOT, don't touch anything here - slot barrier handles it
     }
 
-    int should_quit = (g_debugger.mode == DBG_MODE_QUIT);
+    should_quit = (g_debugger.mode == DBG_MODE_QUIT);
     pthread_mutex_unlock(&g_debugger.barrier_lock);
 
     return should_quit;

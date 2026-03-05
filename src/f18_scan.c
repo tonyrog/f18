@@ -279,7 +279,7 @@ again:
 	    while(*ptr && isblank(*ptr)) ptr++;
 	    name = ptr;
 	    while(*ptr && !isblank(*ptr)) { len++; ptr++; }
-	    if (add_symbol(name, len, slot, addr, symtab) < 0)
+	    if (add_symbol(name, len, slot, addr, mem_ptr, symtab) < 0)
 		printf("warning: could not add symbol %-*s to symtab\n",
 		       len, name);
 	    goto again;
