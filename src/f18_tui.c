@@ -239,9 +239,10 @@ void tui_draw_grid(void)
                 mvprintw(y, grid_left + 3 + j * 4, "----");
             else if (is_focus)
                 mvprintw(y, grid_left + 3 + j * 4, "[>>]");
-            else if (is_blocked)
-                mvprintw(y, grid_left + 3 + j * 4, "[B%c]",
-                         np->debug.blocked_dir ? 'W' : 'R');
+            else if (is_blocked) {
+		const char* name = f18_ins[np->n.wins].name;
+		mvprintw(y, grid_left + 3 + j * 4, "[%2s]", name);
+	    }
             else if (is_step)
                 mvprintw(y, grid_left + 3 + j * 4, "[**]");
             else

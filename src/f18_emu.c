@@ -145,9 +145,6 @@ const f18_symbol_table_t io_symtab  = SYMTAB_INITALIZER(iosym);
 	 np->reg.c = C;				\
      } while(0)
 
- static uint18_t read_mem(node_t* np, uint18_t addr);
-
-
 // wrap addresses into regular ROM/RAM/IO addresses
 uint18_t normalize_addr(uint18_t addr)
 {
@@ -236,7 +233,7 @@ uint18_t normalize_addr(uint18_t addr)
  #define DUMP(np)
  #endif
 
- static uint18_t read_mem(node_t* np, uint18_t addr)
+static uint18_t read_mem(node_t* np, uint18_t addr, uint5_t ins)
  {
      uint18_t value;
      if (addr <= RAM_END2) {
@@ -248,13 +245,15 @@ uint18_t normalize_addr(uint18_t addr)
 	 VERBOSE(np,"read rom[%x] = %x\n", addr, value);
      }
      else {
+	 np->wins = ins;
 	 value = (*np->read_ioreg)(np, addr & MASK9);
+	 np->wins = INS_NOP;
 	 VERBOSE(np,"read ioreg[%x] = %x\n", addr & MASK9, value);
      }
      return value;
  }
 
- static void write_mem(node_t* np, uint18_t addr, uint18_t val)
+static void write_mem(node_t* np, uint18_t addr, uint18_t val, uint5_t ins)
  {
      if (addr <= RAM_END2) {
 	 np->ram[addr & MASK6] = val;
@@ -272,7 +271,9 @@ uint18_t normalize_addr(uint18_t addr)
      }
      else {
 	 VERBOSE(np,"write ioreg[%04x] = %x\n", addr & MASK9, val);
+	 np->wins = ins;	 
 	 (*np->write_ioreg)(np, addr & MASK9, val);
+	 np->wins = INS_NOP;	 
      }
  }
 
@@ -310,7 +311,7 @@ uint18_t normalize_addr(uint18_t addr)
 
      P0 = P & MASK9;
      p_inc();
-     I = read_mem(np, P0);
+     I = read_mem(np, P0, INS_FETCH_P);
      if (np->flags & FLAG_TERMINATE)
 	 return;
      // Track instruction address and word for debugger display
@@ -383,44 +384,44 @@ uint18_t normalize_addr(uint18_t addr)
      case INS_FETCH_P:  //  @p ( -- x ) fetch via P auto-increament
 	 P0 = P & MASK9;	
 	 p_inc();	
-	 PUSH_s(np, read_mem(np, P0));
+	 PUSH_s(np, read_mem(np, P0, INS_FETCH_P));
 	 break;
 
      case INS_FETCH_PLUS:  // @+ ( -- x ) fetch via A auto-increament
 	 A0 = A & MASK9;
 	 a_inc();	
-	 PUSH_s(np, read_mem(np, A0));
+	 PUSH_s(np, read_mem(np, A0, INS_FETCH_PLUS));
 	 break;
 
      case INS_FETCH_B:  // @b ( -- x ) fetch via B
-	 PUSH_s(np, read_mem(np, B));
+	 PUSH_s(np, read_mem(np, B, INS_FETCH_B));
 	 break;
 
      case INS_FETCH:    // @ ( -- x ) fetch via A
-	 PUSH_s(np, read_mem(np, A));
+	 PUSH_s(np, read_mem(np, A, INS_FETCH));
 	 break;
 
      case INS_STORE_P:  // !p ( x -- ) store via P auto increment
 	 P0 = P & MASK9;
 	 p_inc();
-	 write_mem(np, P0, T);
+	 write_mem(np, P0, T, INS_STORE_P);
 	 POP_s(np);
 	 break;
 
      case INS_STORE_PLUS: // !+ ( x -- ) \ write T in [A] pop data stack, inc A
 	 A0 = A & MASK9;	
 	 a_inc();	
-	 write_mem(np, A0, T);
+	 write_mem(np, A0, T, INS_STORE_PLUS);
 	 POP_s(np);
 	 break;
 
      case INS_STORE_B:  // !b ( x -- ) \ store T into [B], pop data stack
-	 write_mem(np, B, T);
+	 write_mem(np, B, T, INS_STORE_B);
 	 POP_s(np);
 	 break;
 
      case INS_STORE:    // ! ( x -- ) \ store T info [A], pop data stack
-	 write_mem(np, A, T);
+	 write_mem(np, A, T, INS_STORE);
 	 POP_s(np);
 	 break;
 

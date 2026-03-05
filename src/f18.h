@@ -156,7 +156,6 @@
 #define FLAG_WR_BIN_DOWN  0x02000
 #define FLAG_WR_BIN_UP    0x01000
 
-
 #define MAKE_ID(i,j)     ((i)*100+(j))
 #define ID_TO_ROW(id)    ((id)/100)
 #define ID_TO_COLUMN(id) ((id)%100)
@@ -264,7 +263,8 @@ typedef struct _node_t {
     useconds_t delay;       // delay between instructions
     uint18_t flags;         // flags,debug,trace...
     uint9_t io_addr;        // io_addr for gpio or 0 if not used
-
+    uint5_t wins;           // instruction during wait FETCH/STORE (NOP)
+    
     // System dependent functions
     void* user;  // user data pointer
     uint18_t (*read_ioreg)(struct _node_t* np, uint18_t reg);
