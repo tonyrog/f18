@@ -2,46 +2,14 @@
 
 #include <string.h>
 #include "f18.h"
+#include "f18_sym.h"
 
 #define HEXADECIMAL_ADDR
 
 #define dec(d) ((d)+'0')
 #define hex(d) (((d)<10) ? ((d)+'0') : (((d)-10)+'a'))
 
-extern int find_symbol_by_value(uint18_t addr, const f18_symbol_table_t* symtab);
-
-// wrap addresses into regular ROM/RAM/IO addresses
-uint18_t normalize_addr(uint18_t addr)
-{
-    if (addr <= RAM_END2)
-	return (addr & MASK6);
-    else if (addr <= ROM_END2)
-	return ROM_START + ((addr-ROM_START) & MASK6);
-    else if (addr <= IOREG_END)
-	return addr; // io-address
-    return addr & MASK9;
-}
-
-int lookup_sym(const f18_symbol_t* sym, uint18_t addr)
-{
-    int s = 0;
-    uint18_t a;
-
-    a = normalize_addr(addr);
-
-    if (sym == NULL)
-	return -1;
-    while (sym[s].name != NULL) {
-	uint9_t b = normalize_addr(sym[s].value);
-	if (a == b) {
-	    return s;
-	}
-	s++;
-    }
-    return -1;
-}
-
-
+//
 //  <<slot0:5>> <<slot1:5> <<<slot2:5> <<slot3:3>>
 // 
 
@@ -60,7 +28,7 @@ int f18_disasm_instruction(uint18_t addr, uint18_t I,
     for (i = 0; i < 4; i++) {
 	uint5_t ins = (I >> 15) & 0x1f;
 	const char* ins_name = f18_ins[ins].name;
-	int l = strlen(ins_name);
+	int l = SYMLEN(&f18_ins[ins]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
 	memcpy(ptr, ins_name, m);
@@ -89,20 +57,20 @@ load:
     case 2: I = (addr & ~MASK3)  | ((I0 ^ IMASK) & MASK3); break;
     }
     if (ptr < ptr_end) *ptr++ = ':';
-    if ((i = find_symbol_by_value(I, symtab)) != -1) {
+    if ((i = find_symbol_by_addr(I, symtab)) != -1) {
 	int l = SYMLEN(&symtab->symbol[i]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
 	memcpy(ptr, symtab->symbol[i].name, m);
 	ptr += m;
     }
-    else if ((i = find_symbol_by_value(I, &io_symtab)) != -1) {
+    else if ((i = find_symbol_by_addr(I, &io_symtab)) != -1) {
 	int l = SYMLEN(&io_symtab.symbol[i]);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
 	memcpy(ptr, io_symtab.symbol[i].name, m);
 	ptr += m;
-    }    
+    }
     else { // decimal. configure? 3, 8, 10-bit
 	// I = 0..1023
 #ifdef HEXADECIMAL_ADDR
@@ -115,7 +83,7 @@ load:
 #else
 	d = (I / 1000); I %= 1000;	
 	if (d != 0) { if (ptr < ptr_end) *ptr++ = dec(d); }
-	d = (I / 100); I %= 100;	
+	d = (I / 100); I %= 100;
 	if (ptr < ptr_end) *ptr++ = dec(d);
 	d = (I / 10); I %= 10;		
 	if (ptr < ptr_end) *ptr++ = dec(d);
@@ -138,7 +106,7 @@ void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
 	int i = 0;
 
 	f18_disasm_instruction(addr+1, val, symtab, ins_buf, sizeof(ins_buf));
-	if ((i = find_symbol_by_value(addr, symtab)) != -1) {
+	if ((i = find_symbol_by_addr(addr, symtab)) != -1) {
 	    fprintf(stdout, "%s%s:\n", symtab->symbol[i].name,
 		    (addr & 0x200)?".p":"");
 	}

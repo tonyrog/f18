@@ -6,18 +6,6 @@
 #include "f18_node.h"
 #include "f18_strings.h"
 
-/*
-const char* f18_ins_name[32] = {
-    ";",     "ex",   "jump", "call",
-    "unext", "next", "if",   "-if",
-    "@p",    "@+",   "@b",   "@",
-    "!p",    "!+",   "!b",   "!",
-    "+*",    "2*",   "2/",   "inv",
-    "+",     "and",  "xor",   "drop",
-    "dup",   "r>",  "over", "a",
-    ".",     ">r", "b!",   "a!"
-};
-*/
 const f18_symbol_t f18_ins[32] = {
     { 0x00,    SYMSTR(SEMI) },      // slot 3
     { 0x01,    SYMSTR(ex) },
@@ -53,8 +41,30 @@ const f18_symbol_t f18_ins[32] = {
     { 0x1f,   SYMSTR(a_BANG)}
 };
 
-const f18_symbol_table_t f18_inst_symtab = SYMTAB_INITALIZER(f18_ins);
+const f18_symbol_table_t f18_ins_symtab = SYMTAB_INITALIZER(f18_ins);
 
+// NOTE! Addresses are sorted!
+const f18_symbol_t iosym[] = {
+    { IOREG__D_U, SYMSTR(DASH_d_DASH_u) },
+    { IOREG__D__, SYMSTR(DASH_d_DASH_DASH) },
+    { IOREG__DLU, SYMSTR(DASH_dlu) },
+    { IOREG__DL_, SYMSTR(DASH_dl_DASH) },
+    { IOREG_DATA, SYMSTR(data) },
+    { IOREG____U, SYMSTR(DASH_DASH_DASH_u) },
+    { IOREG_IO,   SYMSTR(io) },
+    { IOREG___LU, SYMSTR(DASH_DASH_lu) },
+    { IOREG___L_, SYMSTR(DASH_DASH_l_DASH) },
+    { IOREG_RD_U, SYMSTR(rd_DASH_u) },
+    { IOREG_RD__, SYMSTR(rd_DASH_DASH) },
+    { IOREG_RDLU, SYMSTR(rdlu) },
+    { IOREG_RDL_, SYMSTR(rdl_DASH) },
+    { IOREG_R__U, SYMSTR(r_DASH_DASH_u) },
+    { IOREG_R___, SYMSTR(r_DASH_DASH_DASH) },
+    { IOREG_R_LU, SYMSTR(r_DASH_lu) },
+    { IOREG_R_L_, SYMSTR(r_DASH_l_DASH) },
+};
+
+const f18_symbol_table_t io_symtab  = SYMTAB_INITALIZER(iosym);
 
  #define CHECK_DS_OVERFLOW(np) check_overflow((np),SP, 8,  "data stack"),
  #define CHECK_DS_UNDERFLOW(np) check_underflow((np),SP, 0, "data stack"),
@@ -136,6 +146,20 @@ const f18_symbol_table_t f18_inst_symtab = SYMTAB_INITALIZER(f18_ins);
      } while(0)
 
  static uint18_t read_mem(node_t* np, uint18_t addr);
+
+
+// wrap addresses into regular ROM/RAM/IO addresses
+uint18_t normalize_addr(uint18_t addr)
+{
+    if (addr <= RAM_END2)
+	return (addr & MASK6);
+    else if (addr <= ROM_END2)
+	return ROM_START + ((addr-ROM_START) & MASK6);
+    else if (addr <= IOREG_END)
+	return addr; // io-address
+    return addr & MASK9;
+}
+
 
  static int check_overflow(node_t* np,int val,int maxval,const char *msg)
  {

@@ -302,3 +302,37 @@ const char SN_xxt[] = { 'R', 3, 120,120,116,0};
 const char SN_zeq[] = { 'R', 3, 122,101,113,0};
 // string: "zless"
 const char SN_zless[] = { 'R', 5, 122,108,101,115,115,0};
+// string: "io"
+const char SN_io[] = { 'R', 2, 105,111,0};
+// string: "data"
+const char SN_data[] = { 'R', 4, 100,97,116,97,0};
+// string: "-d-u"
+const char SN_DASH_d_DASH_u[] = { 'R', 4, 45,100,45,117,0};
+// string: "-d--"
+const char SN_DASH_d_DASH_DASH[] = { 'R', 4, 45,100,45,45,0};
+// string: "-dlu"
+const char SN_DASH_dlu[] = { 'R', 4, 45,100,108,117,0};
+// string: "-dl-"
+const char SN_DASH_dl_DASH[] = { 'R', 4, 45,100,108,45,0};
+// string: "---u"
+const char SN_DASH_DASH_DASH_u[] = { 'R', 4, 45,45,45,117,0};
+// string: "--lu"
+const char SN_DASH_DASH_lu[] = { 'R', 4, 45,45,108,117,0};
+// string: "--l-"
+const char SN_DASH_DASH_l_DASH[] = { 'R', 4, 45,45,108,45,0};
+// string: "rd-u"
+const char SN_rd_DASH_u[] = { 'R', 4, 114,100,45,117,0};
+// string: "rdlu"
+const char SN_rdlu[] = { 'R', 4, 114,100,108,117,0};
+// string: "rd--"
+const char SN_rd_DASH_DASH[] = { 'R', 4, 114,100,45,45,0};
+// string: "rdl-"
+const char SN_rdl_DASH[] = { 'R', 4, 114,100,108,45,0};
+// string: "r--u"
+const char SN_r_DASH_DASH_u[] = { 'R', 4, 114,45,45,117,0};
+// string: "r---"
+const char SN_r_DASH_DASH_DASH[] = { 'R', 4, 114,45,45,45,0};
+// string: "r-lu"
+const char SN_r_DASH_lu[] = { 'R', 4, 114,45,108,117,0};
+// string: "r-l-"
+const char SN_r_DASH_l_DASH[] = { 'R', 4, 114,45,108,45,0};

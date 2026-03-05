@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include <unistd.h>
 
+#include "f18_types.h"
+#include "f18_sym.h"
+
 #define INS_RETURN     0x00   // ;
 #define INS_EXECUTE    0x01   // ex
 #define INS_PJUMP      0x02   // jump <10-bit>
@@ -44,57 +47,8 @@
 #define META_DEF       0x22   // ':' arg = symbol name
 #define META_VALUE     0x80   // value
 
-typedef uint32_t uint18_t;  // 18 bits packed into 32 bits
-typedef uint16_t uint9_t;   // 9 bits packed into 16 bits
-typedef uint16_t uint10_t;  // 10 bits packed into 16 bits
-typedef uint8_t  uint5_t;   // 5 bits packed into 8 bits
-typedef uint8_t  uint3_t;   // 3 bits packed into 8 bits
-
 #define CAT_HELPER2(x,y) x ## y
 #define CAT2(x,y) CAT_HELPER2(x,y)
-
-#define SYMLEN(sym) (sym)->name[-1]
-#define SYMTYP(sym) (sym)->name[-2]
-#define SYMSTR(Name) ((char*)CAT2(SN_,Name)+2)
-
-typedef struct {
-    uint18_t value;
-    char* name;      // [typ][len]string:len[0]
-} f18_symbol_t;
-
-typedef struct {
-    uint9_t addr;  // patch address
-    uint8_t slot;  // 0..2 (3 can not be used)
-    uint9_t next;  // next patch address 0 = end
-} f18_symbol_patch_t;
-
-typedef struct {
-    uint8_t* heap;        // start heap memory
-    size_t   heap_size;   // total size of heap
-    f18_symbol_t* symbol;
-    f18_symbol_t* next;   // next slot to insert to
-    char*    dp;        // name pointer from low heap to high
-} f18_symbol_table_t;
-
-#define RESET_SYMTAB(sp) do {						\
-	(sp)->symbol = (f18_symbol_t*) ((sp)->heap);			\
-	(sp)->next   =  (f18_symbol_t*) ((sp)->heap);			\
-	(sp)->dp     = (char*)(((sp)->heap)) + (((sp)->heap_size));	\
-    } while(0)
-
-#define INIT_SYMTAB(sp, mem, memsize) do {		\
-	(sp)->heap   = (mem);				\
-	(sp)->heap_size = (memsize);			\
-	RESET_SYMTAB(sp);				\
-    } while(0)
-
-// init of fixed (const) f18_symbols array
-#define SYMTAB_INITALIZER(sarr) { 		\
-  .heap = NULL,					\
-  .heap_size = 0,				\
-  .dp = NULL,				        \
-  .symbol = (f18_symbol_t*)(sarr),		\
-  .next = ((f18_symbol_t*)(sarr))+(sizeof((sarr))/sizeof(f18_symbol_t)), }
 
 // address layout in binary
 // 000000000 - 000111111    RAM
@@ -365,10 +319,6 @@ extern void sys_enter_blocked_port(void);
 extern void sys_leave_blocked_port(void);
 extern void sys_enter_blocked_ext(void);
 extern void sys_leave_blocked_ext(void);
-
-extern const char* f18_ins_name[32];
-extern const f18_symbol_t f18_ins[32];
-extern const f18_symbol_table_t f18_inst_symtab;
 
 // f8_rom_type_t => f18_rom_t
 extern const f18_rom_t RomMap[];

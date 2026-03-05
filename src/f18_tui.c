@@ -8,13 +8,13 @@
 #include <string.h>
 #include <sys/time.h>
 
+#include "f18_sym.h"
 #include "f18_tui.h"
 #include "f18_node.h"
 
 // External node array from f18_exec.c
 extern node_t* node[8][18];
 extern uint32_t g_v, g_h;
-extern int find_symbol_by_value(uint18_t addr, f18_symbol_table_t* symtab);
 
 // Unicode box drawing characters
 #define BOX_H      L'\u2500'  // ─
@@ -300,10 +300,12 @@ void tui_draw_stacks(node_t* np)
 // Check if opcode is a branch/jump instruction that uses remaining bits for address
 static int is_branch_opcode(int opcode)
 {
-    return (opcode == INS_PJUMP || opcode == INS_PCALL ||
-            opcode == INS_NEXT || opcode == INS_IF || opcode == INS_MINUS_IF);
+    return (opcode == INS_PJUMP ||
+	    opcode == INS_PCALL ||
+            opcode == INS_NEXT ||
+	    opcode == INS_IF ||
+	    opcode == INS_MINUS_IF);
 }
-
 
 // Decode an instruction word into slot strings
 // Returns number of valid slots (1-4)
@@ -328,7 +330,7 @@ static int decode_instruction(node_t* np, uint18_t addr, uint18_t word,
 	    default: dest = 0; // Slot 3 branch not possible
 	    }
             dests[s] = dest;
-	    if ((i = find_symbol_by_value(dest, np->symtab)) >= 0)
+	    if ((i = find_symbol_by_addr(dest, np->symtab)) >= 0)
 		snprintf(slots[s], 16, "%s:%s", f18_ins[opcode].name,
 			 np->symtab->symbol[i].name);
 	    else
@@ -356,26 +358,40 @@ static int decode_instruction(node_t* np, uint18_t addr, uint18_t word,
 
 void tui_draw_disasm(node_t* np)
 {
-    attron(COLOR_PAIR(COLOR_BORDER));
     char title[32];
+    int i;
+    int y;
+    uint18_t pc;
+    int cur_slot;
+    int start;
+    
+    attron(COLOR_PAIR(COLOR_BORDER));
     snprintf(title, sizeof(title), "Disasm [slot %d]", g_debugger.current_slot);
     draw_box(disasm_top, disasm_left, disasm_height, disasm_width, title);
     attroff(COLOR_PAIR(COLOR_BORDER));
 
     if (!np) return;
 
-    int y = disasm_top + 1;
+    y = disasm_top + 1;
     // Use tracked PC from debugger (correct even when P has been incremented)
-    uint18_t pc = g_debugger.current_pc & MASK9;
-    int cur_slot = g_debugger.current_slot;
+    pc = g_debugger.current_pc & MASK9;
+    cur_slot = g_debugger.current_slot;
 
     // Show 2 instructions before and 2 after current
-    int start = (pc > 2) ? pc - 2 : 0;
+    start = (pc > 2) ? pc - 2 : 0;
 
-    for (int i = 0; i < 5 && y < disasm_top + disasm_height - 1; i++) {
+    for (i = 0; (i < 5) && (y < (disasm_top+disasm_height-1)); i++) {
         uint18_t addr = start + i;
         uint18_t word;
-
+	int x, s;
+	int num_slots;
+        char slots[4][16];
+        uint18_t dests[4];
+	int is_current;
+	int w;
+	int width;
+	int attr;
+	
         // For current instruction, use tracked word (guaranteed correct)
         if (addr == pc) {
             word = g_debugger.current_iword;
@@ -388,32 +404,44 @@ void tui_draw_disasm(node_t* np)
         }
 
         // Decode instruction
-        char slots[4][16];
-        uint18_t dests[4];
-        int num_slots = decode_instruction(np, addr, word, slots, dests);
+        num_slots = decode_instruction(np, addr, word, slots, dests);
+        is_current = (addr == pc);
 
-        int is_current = (addr == pc);
         mvprintw(y, disasm_left + 1, "%c%03x:", is_current ? '>' : ' ', addr);
 
         // Print each slot
-        int x = disasm_left + 6;
-        for (int s = 0; s < 4; s++) {
-            int width = (s < num_slots && strlen(slots[s]) > 5) ? 16 : 6;
-            if (s >= num_slots || slots[s][0] == '\0') {
-                mvprintw(y, x, "%*s", width, "");  // Empty slot
-            } else if (is_current && s == cur_slot) {
-                attron(A_REVERSE | A_BOLD);
-                mvprintw(y, x, " %-*s", width - 1, slots[s]);
-                attroff(A_REVERSE | A_BOLD);
-            } else if (is_current && s < cur_slot) {
-                attron(A_DIM);
-                mvprintw(y, x, " %-*s", width - 1, slots[s]);
-                attroff(A_DIM);
-            } else {
-                mvprintw(y, x, " %-*s", width - 1, slots[s]);
-            }
+        x = disasm_left + 6;
+	w = disasm_width - 2 - 6; // remain, removed edges and address
+        for (s = 0; s < num_slots-1; s++) {
+            width = 6;
+	    if (is_current && (s == cur_slot))
+		attr = A_REVERSE | A_BOLD;
+	    else if (is_current && s < cur_slot)
+		attr = A_DIM;
+	    else
+		attr = A_NORMAL;
+	    attron(attr);
+	    mvprintw(y, x, " %-*s", width - 1, slots[s]);
+	    attroff(attr);
             x += width;
+	    w -= width;
         }
+	// print last slot either instruction or call type
+	width = (strlen(slots[s]) > w) ? 6 : w;
+	if (is_current && (s == cur_slot))
+	    attr = A_REVERSE | A_BOLD;
+	else if (is_current && s < cur_slot)
+	    attr = A_DIM;
+	else
+	    attr = A_NORMAL;
+	attron(attr);
+	mvprintw(y, x, " %-*s", width - 1, slots[s]);
+	attroff(attr);	
+	x += width;
+	w -= width;
+	if (w > 0) {
+	    mvprintw(y, x, "%*s", w, "");  // fill empty
+	}
         y++;
     }
 }
@@ -458,29 +486,45 @@ void tui_draw_command(void)
     }
 }
 
+void print_center(int y, int x, char* text, int width)
+{
+    int len = strlen(text);
+    int pad1 = (width - len)/2;
+    int pad2 = (width - (pad1 + len));
+    attron(A_REVERSE | A_BOLD);    
+    mvprintw(y, x, " %*s%s%*s", pad1, " ", text, pad2, " ");
+    attroff(A_REVERSE | A_BOLD);        
+}
+
 void tui_draw_help(void)
 {
-    if (!show_help) return;
+    int x, y, w, h;
+    
+    if (!show_help)
+	return;
 
-    int h = 16, w = 50;
-    int y = (term_rows - h) / 2;
-    int x = (term_cols - w) / 2;
+    h = 16;
+    w = 50;
+    y = (term_rows - h) / 2;
+    x = (term_cols - w) / 2;
 
     attron(COLOR_PAIR(COLOR_TITLE));
     draw_box(y, x, h, w, "Help");
-
-    mvprintw(y + 1, x + 2, "Keyboard Commands:");
-    mvprintw(y + 3, x + 2, "TAB / s   Step one slot (micro-step)");
-    mvprintw(y + 4, x + 2, "SPACE / S Step one instruction word");
-    mvprintw(y + 5, x + 2, "n         Step over call/loop");
-    mvprintw(y + 6, x + 2, "c         Continue");
-    mvprintw(y + 7, x + 2, "p         Pause");
-    mvprintw(y + 8, x + 2, "f         Cycle focus node");
-    mvprintw(y + 9, x + 2, "r         Refresh display");
-    mvprintw(y + 10, x + 2, "b         Set breakpoint");
-    mvprintw(y + 11, x + 2, "q         Quit");
-    mvprintw(y + 13, x + 2, "Press any key to close");
-
+    w -= 3;  // edge + leading space
+    mvprintw(y + 1, x + 1, " %-*s", w, "Keyboard Commands:");
+    mvprintw(y + 2, x + 1, " %-*s", w, "");
+    mvprintw(y + 3, x + 1, " %-*s", w, "TAB / s   Step one slot (micro-step)");
+    mvprintw(y + 4, x + 1, " %-*s", w, "SPACE / S Step one instruction word");
+    mvprintw(y + 5, x + 1, " %-*s", w, "n         Step over call/loop");
+    mvprintw(y + 6, x + 1, " %-*s", w, "c         Continue");
+    mvprintw(y + 7, x + 1, " %-*s", w, "p         Pause");
+    mvprintw(y + 8, x + 1, " %-*s", w, "f         Cycle focus node");
+    mvprintw(y + 9, x + 1, " %-*s", w, "r         Refresh display");
+    mvprintw(y + 10, x + 1, " %-*s", w, "b         Set breakpoint");
+    mvprintw(y + 11, x + 1, " %-*s", w, "q         Quit");
+    mvprintw(y + 12, x + 1, " %-*s", w, "");
+    mvprintw(y + 13, x + 1, " %-*s", w, "");
+    print_center(y + 14, x+1, "Press any key to close", w);
     attroff(COLOR_PAIR(COLOR_TITLE));
 }
 
