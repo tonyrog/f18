@@ -254,7 +254,7 @@ void tui_draw_grid(void)
     }
 
     mvprintw(grid_top + grid_height - 2, grid_left + 2,
-             "[>>]=focus [Bx]=blocked");
+             "[>>]=focus [Op]=blocked");
 }
 
 void tui_draw_registers(node_t* np)
@@ -298,7 +298,7 @@ void tui_draw_stacks(node_t* np)
     // Data stack (left half)
     int y = stack_top + 1;
     int half = stack_width / 2;
-    mvprintw(y, stack_left + 2, "Data Stack");
+    mvprintw(y, stack_left + 2, "Data");
     y++;
     mvprintw(y++, stack_left + 2, "T: %05x", np->reg.t);
     mvprintw(y++, stack_left + 2, "S: %05x", np->reg.s);
@@ -309,7 +309,7 @@ void tui_draw_stacks(node_t* np)
 
     // Return stack (right half)
     y = stack_top + 1;
-    mvprintw(y, stack_left + half + 1, "Ret Stack");
+    mvprintw(y, stack_left + half + 1, "Return");
     y++;
     mvprintw(y++, stack_left + half + 1, "R: %05x", np->reg.r);
     for (int i = 0; i < 4 && y < stack_top + stack_height - 1; i++) {

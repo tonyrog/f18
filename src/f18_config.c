@@ -12,14 +12,14 @@
 #define RDLU  { .rom=basic, .comm=IOREG_RDLU,  .io_addr=0, .io_type=none, .reset=IOREG_RDLU }
 
 #define N000 RD
-#define N001 { .rom = serdes_boot, .comm = IOREG_RDL_, .io_addr=IOREG____U, .io_type=serdes,.reset=COLD }
+#define N001 { .rom = serdes_boot, .comm = IOREG_RDL_, .io_addr=IOREG____U, .io_type=serdes,.reset=COLD, .io_pin = { 26, 27 } }
 #define N002 RDL
 #define N003 RDL
 #define N004 RDL
 #define N005 RDL
 #define N006 RDL
 #define N007 { .rom=sdram_data,    .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=parallel_bus, .reset=IOREG_RDL_ }
-#define N008 { .rom=sdram_control, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x4,      .reset=IOREG_RDL_ }
+#define N008 { .rom=sdram_control, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x4,      .reset=IOREG_RDL_, .io_pin = { 33, 34, 35, 36 } }
 #define N009 { .rom=sdram_addr,    .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=parallel_bus, .reset=IOREG_RDL_ }
 #define N010 RDL
 #define N011 RDL
@@ -29,7 +29,7 @@
 #define N015 RDL
 #define N016 RDL
 #define N017 RD
-#define N100 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
+#define N100 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 20 } }
 #define N101 RDLU
 #define N102 RDLU
 #define N103 RDLU
@@ -46,8 +46,8 @@
 #define N114 RDLU
 #define N115 RDLU
 #define N116 RDLU
-#define N117 { .rom=analog, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=analog_pin, .reset=IOREG_RD_U }
-#define N200 { .rom=one_wire, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
+#define N117 { .rom=analog, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=analog_pin, .reset=IOREG_RD_U, .io_pin = { 48, 50} }
+#define N200 { .rom=one_wire, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 18 } }
 #define N201 RDLU
 #define N202 RDLU
 #define N203 RDLU
@@ -64,8 +64,8 @@
 #define N214 RDLU
 #define N215 RDLU
 #define N216 RDLU
-#define N217 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
-#define N300 { .rom=sync_boot, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x2, .reset=COLD }
+#define N217 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 51 }, .trigger = { 117 } }
+#define N300 { .rom=sync_boot, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x2, .reset=COLD, .io_pin = { 14, 15 } }
 #define N301 RDLU
 #define N302 RDLU
 #define N303 RDLU
@@ -82,7 +82,7 @@
 #define N314 RDLU
 #define N315 RDLU
 #define N316 RDLU
-#define N317 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
+#define N317 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 52 } }
 #define N400 RDU
 #define N401 RDLU
 #define N402 RDLU
@@ -100,8 +100,8 @@
 #define N414 RDLU
 #define N415 RDLU
 #define N416 RDLU
-#define N417 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
-#define N500 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
+#define N417 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 59 }  }
+#define N500 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 7 } }
 #define N501 RDLU
 #define N502 RDLU
 #define N503 RDLU
@@ -118,8 +118,8 @@
 #define N514 RDLU
 #define N515 RDLU
 #define N516 RDLU
-#define N517 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
-#define N600 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U }
+#define N517 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 60 }, .trigger = { 617 } }
+#define N600 { .rom=basic, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=gpio_x1, .reset=IOREG_RD_U, .io_pin = { 6 } }
 #define N601 RDLU
 #define N602 RDLU
 #define N603 RDLU
@@ -136,25 +136,25 @@
 #define N614 RDLU
 #define N615 RDLU
 #define N616 RDLU
-#define N617 { .rom=analog, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=analog_pin, .reset=IOREG_RD_U }
+#define N617 { .rom=analog, .comm=IOREG_RD_U,  .io_addr=IOREG___L_, .io_type=analog_pin, .reset=IOREG_RD_U, .io_pin = { 61, 63 } }
 #define N700 RD
-#define N701 { .rom=serdes_boot, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=serdes, .reset=COLD }
+#define N701 { .rom=serdes_boot, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=serdes, .reset=COLD, .io_pin = { 86, 87 } }
 #define N702 RDL
 #define N703 RDL
 #define N704 RDL
-#define N705 { .rom=spi_boot, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x4, .reset=COLD }
+#define N705 { .rom=spi_boot, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x4, .reset=COLD, .io_pin = { 80, 81, 84, 85 } }
 #define N706 RDL
 #define N707 RDL
-#define N708 { .rom=async_boot, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x2, .reset=COLD }
-#define N709 { .rom=analog, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=analog_pin, .reset=IOREG_RDL_ }
+#define N708 { .rom=async_boot, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x2, .reset=COLD, .io_pin = { 78, 79 } }
+#define N709 { .rom=analog, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=analog_pin, .reset=IOREG_RDL_, { 76, 77 } }
 #define N710 RDL
 #define N711 RDL
 #define N712 RDL
-#define N713 { .rom=analog, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=analog_pin, .reset=IOREG_RDL_ }
+#define N713 { .rom=analog, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=analog_pin, .reset=IOREG_RDL_, .io_pin = { 73, 72 } }
 #define N714 RDL
-#define N715 { .rom=basic, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x1, .reset=IOREG_RDL_ }
+#define N715 { .rom=basic, .comm=IOREG_RDL_,  .io_addr=IOREG____U, .io_type=gpio_x1, .reset=IOREG_RDL_, .io_pin = { 71 }, .trigger= { 709, 713, 717 } }
 #define N716 RDL
-#define N717 { .rom=analog, .comm=IOREG_RD__,  .io_addr=IOREG____U, .io_type=analog_pin, .reset=IOREG_RD__ }
+#define N717 { .rom=analog, .comm=IOREG_RD__,  .io_addr=IOREG____U, .io_type=analog_pin, .reset=IOREG_RD__, .io_pin = { 69, 70} }
 
 const f18_config_t ConfigMap[8][18] =
 {

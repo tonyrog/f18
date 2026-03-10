@@ -43,7 +43,5 @@ org 0
   0x4b
   @p call:send  ( emit newline )
   0x0A
-
-: hang
-  jump:hang
-  ;
+  @p >r ;
+  0xa9

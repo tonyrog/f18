@@ -22,7 +22,9 @@ open(target, async, Opts) ->
     uart:open1(?USB_C, [{baud,?DEFAULT_BAUD},{mode,binary}|Opts]);
 %% host chip serdes port is connected to Node 701
 open(host, async, Opts) ->  
-    uart:open1(?USB_A, [{baud,?DEFAULT_BAUD},{mode,binary}|Opts]).
+    uart:open1(?USB_A, [{baud,?DEFAULT_BAUD},{mode,binary}|Opts]);
+open(Name, async, Opts) -> 
+    uart:open1(Name, [{baud,?DEFAULT_BAUD},{mode,binary}|Opts]).
 
 close(U) ->
     uart:close(U).
@@ -60,5 +62,8 @@ send_word(U, W) ->
 %%
 encode_word(W) ->
     W1 = ((W bsl 6) bor 16#2d) bxor 16#ffffff, 
-    <<W1:24/little>>.
+    Bin = <<W1:24/little>>,
+    io:format("send: ~24.2.0B ~6.16.0B\n", [W1, W1]),
+    Bin.
+
 

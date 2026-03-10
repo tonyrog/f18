@@ -17,6 +17,7 @@
 
 -export([baud/1]).
 -export([demo/0]).
+-export([boot_708/0, boot_708/2]).
 
 -include("f18.hrl").
 
@@ -263,6 +264,27 @@ demo() ->
     f18_uart:send(U, Code),
     Pid ! stop.
 
+%% load a simple code sequence
+%% 
+boot_708() ->
+    boot_708(target, #{ rom => async_boot, encode => true, 
+			baud => 300 }).
+boot_708(DeviceName, Opts) ->
+    Opts1 = maps:merge(#{ rom => async_boot, encode => true, 
+			  device => DeviceName, baud => 300 }, Opts),
+    Bootstream =
+	[[{literal, 16#a9}],  %% completion address (warm)
+	 [{literal, 0}],      %% transfer  adddress (start in RAM[0])
+	 [{literal, 10}]] ++  %% load 10 words
+	[ [{literal,I}] || I <- lists:seq(1,10) ],
+    {ok, Code} = asm_lines(Bootstream, Opts1),
+    {ok,U,Pid} = start_uart(Opts1),
+    f18_uart:send(U, Code),
+    %% wait some time
+    timer:sleep(3000),
+    Pid ! stop.
+    
+
 send(Filename) ->
     send(Filename, #{ rom => basic, encode => true }).
 send(Filename, Opts) ->
@@ -280,7 +302,9 @@ start_uart(Opts) ->
     Pid = spawn_link(
 	    fun() ->
 		    Baud = maps:get(baud, Opts, 460800),
-		    {ok, U} = f18_uart:open(target, async, [{baud,Baud}]),
+		    Device = maps:get(device, Opts, target),
+		    io:format("Baud = ~w\n", [Baud]),
+		    {ok, U} = f18_uart:open(Device, async, [{baud,Baud}]),
 		    uart:flush(U, both),
 		    %% uart:controlling_process(U, Caller),
 		    f18_uart:reset(U),
@@ -361,6 +385,9 @@ asm_lines([],_Addr,Acc,_Opts) ->
     %% patch forward labels?
     {ok, lists:reverse(Acc)}.
 
+asm_line([{literal,A}],_Addr,_Opts) when is_integer(A) ->
+    ?dbg("[0] literal ~w\n", [A]),
+    A;
 asm_line([A],_Addr,_Opts) when is_integer(A) ->
     ?dbg("[0] literal ~w\n", [A]),
     A;
@@ -427,7 +454,7 @@ asm_ops([{JOp,Dest}],Slot,_Shift,Instr,Addr,Opts) when
 		   16#1fff, Addr, Dest)
     end;
 asm_ops([Op|Ops],Slot,Shift,Instr,Addr,Opts) ->
-    ?dbg("[~w] ~s ", [Slot,Op]),
+    ?dbg("[~w] ~p ", [Slot,Op]),
     Code = opcode(Op, compatible),
     asm_ops(Ops,Slot+1,Shift-5,
 	    Instr bor (Code bsl Shift),Addr,Opts);

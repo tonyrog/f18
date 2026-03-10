@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <memory.h>
@@ -25,6 +26,8 @@
 #include "f18_debug.h"
 
 extern node_t* node[8][18];
+extern async_reader_t r708;
+extern async_writer_t w708;
 
 // Invert direction: UP<->DOWN, LEFT<->RIGHT
 static const uint18_t invert_dir[5] = { DOWN, RIGHT, UP, LEFT, GPIO };
@@ -67,6 +70,23 @@ static uint18_t select_dirs(node_t* np, uint18_t ioreg)
     return dirs;
 }
 
+// update ior status for node "owning" channel 'chan'
+static void set_ior(chan_t* chan, uint18_t mask)
+{
+    reg_node_t* np = chan_to_reg_node(chan);
+    pthread_mutex_lock(&chan->lock);
+    np->n.ior |= mask;
+    pthread_mutex_unlock(&chan->lock);
+}
+
+static void clr_ior(chan_t* chan, uint18_t mask)
+{
+    reg_node_t* np = chan_to_reg_node(chan);
+    pthread_mutex_lock(&chan->lock);
+    np->n.ior &= ~mask;
+    pthread_mutex_unlock(&chan->lock);
+}
+
 //
 // Rendezvous protocol for inter-node communication.
 //
@@ -95,6 +115,10 @@ int f18_chan_write(chan_t* chan, uint18_t dir, uint18_t value)
     if (chan->rmask & DIR_BIT(dir)) {
 	// Reader is waiting for data from our direction - deliver!
 	//fprintf(stderr, "  chan_write: deliver value=%d to chan, rmask was %x\n", value, chan->rmask);
+	/*
+	printf("chan_write [%03d] data=%d\n",
+	       chan_to_reg_node(chan)->n.id, value);
+	*/
 	chan->data = value;
 	chan->rmask = 0;          // first writer wins, clear all
 	chan->completed = 1;
@@ -119,7 +143,7 @@ int f18_chan_read(chan_t* chan, uint18_t dir, uint18_t* value_ptr)
     if (chan->wmask & DIR_BIT(dir)) {
 	// Writer is waiting to send in our direction - grab data!
 	*value_ptr = chan->data;
-	// fprintf(stderr, "  chan_read: got value=%d from chan, wmask was %x\n", *value_ptr, chan->wmask);
+	fprintf(stderr, "[%03x] chan_read: got value=%d from chan, dir=%d, wmask was %x\n", chan_to_reg_node(chan)->n.id, chan->data, dir, chan->wmask);
 	chan->wmask = 0;          // first reader wins, clear all
 	chan->completed = 1;
 	pthread_cond_signal(&chan->cond);
@@ -198,13 +222,28 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
 	return;
     }
 
-    if ((ioreg == IOREG_IO) && (np->id == 708) &&
-	(np->rom_type == async_boot)) {
-	dirs = DIR_BIT(GPIO);
-	// fprintf(stderr, "[708] GPIO write: value=%05x\n", value);
+    if (ioreg == IOREG_IO) {
+	// write pins 17,5,3,1, WD, phan 9,7
+	if (dp->ioc != NULL) {
+	    if (f18_chan_write(dp->ioc, GPIO, value))
+		;
+	    else {
+		f18_init_transfer(&dp->chan, WRITE, 0, DIR_BIT(GPIO), value);
+		if (f18_chan_write(dp->ioc, GPIO, value)) {
+		    f18_complete_transfer(&dp->chan, WRITE);
+		}
+		else {
+		    f18_wait_transfer(&dp->chan, WRITE);
+		}
+	    }
+	}
+	else {
+	    np->iow = value;
+	}
+	return;
     }
-    else
-	dirs = select_dirs(np, ioreg);
+
+    dirs = select_dirs(np, ioreg);
     
     if (dirs == 0) {
 	ERROR(np, "io error when writing ioreg=%x, no directions\n", ioreg);
@@ -212,7 +251,7 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     }
 
     // try to find a reader already waiting
-    for (dir = 0; dir < 5; dir++) {
+    for (dir = 0; dir < 4; dir++) {
 	if (!(dirs & DIR_BIT(dir)))
 	    continue;
 	if ((rp = dp->neighbour[dir]) == NULL)
@@ -224,7 +263,7 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     // setup for transfer to dirs
     f18_init_transfer(&dp->chan, WRITE, 0, dirs, value);
 
-    for (dir = 0; dir < 5; dir++) {
+    for (dir = 0; dir < 4; dir++) {
 	if (!(dirs & DIR_BIT(dir)))
 	    continue;
 	if ((rp = dp->neighbour[dir]) == NULL)
@@ -242,14 +281,17 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     dp->debug.blocked_addr = 0;
 }
 
-uint18_t read_status(reg_node_t* dp)
+// check neighbours and pins and update io read mask
+void update_io_status(reg_node_t* dp)
 {
     uint18_t status = 0;
+    uint18_t mask   = 0;    
     uint18_t dirs;
     int dir;
     chan_t* rp;
-    
+
     dirs = select_dirs((node_t*)dp, IOREG_RDLU);
+
     for (dir = 0; dir < 4; dir++) {
 	uint18_t idir;
 	if (!(dirs & DIR_BIT(dir))) continue;
@@ -257,13 +299,16 @@ uint18_t read_status(reg_node_t* dp)
 	    continue;
 	idir = invert_dir[dir];
 	pthread_mutex_lock(&rp->lock);
-	if (rp->wmask & DIR_BIT(idir))    // neighbor is writing to us
+	if (rp->wmask & DIR_BIT(idir)) {   // neighbour is writing to us
 	    status |= F18_IO_DIR_WR(dir);  // Xw=1 (active high)
-	if (!(rp->rmask & DIR_BIT(idir))) // neighbor is NOT reading from us
-	    status |= F18_IO_DIR_RD(dir);  // Xr-=1 (idle)
+	    mask   |= F18_IO_DIR_WR(dir);
+	}
+	if ((rp->rmask & DIR_BIT(idir))) { // neighbour is reading from us
+	    mask   |= F18_IO_DIR_RD(dir);  // Xr-=1 (idle)	    
+	}
 	pthread_mutex_unlock(&rp->lock);
     }
-    return status;
+    dp->n.ior = (dp->n.ior & ~mask) | (status & mask);
 }
 
 uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
@@ -280,8 +325,10 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	return 0;
     }
 
-    if (ioreg == IOREG_IO)
-	return read_status(dp);
+    if (ioreg == IOREG_IO) {
+	update_io_status(dp);
+	return dp->n.ior;
+    }
 
     dirs = select_dirs(np, ioreg);
     iodir  = np->io_addr ?
@@ -338,30 +385,74 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
  * read/write async serial data
  */
 
+#define BAUD       300
+#define NDATABITS  8
+#define NSTOPBITS  1
+#define UDELAY(B) ((unsigned long)((1/((double)(B)))*1000000))
+
+char digit[] = "0123456789abcdef";
+char* ltoa(long value, char* ptr, size_t minlen, size_t maxlen, int radix)
+{
+    char* end_ptr;
+    int sign = 0;
+    int len = minlen;
+
+    if (radix > 16)
+	return NULL;
+    end_ptr = ptr;
+    ptr = ptr + maxlen - 1;
+    *ptr = '\0';
+    if (value < 0) {
+	sign = 1;
+	value = -value;
+    }
+    if (ptr > end_ptr) {
+	do {
+	    int d = value % radix;
+	    value = value / radix;
+	    *--ptr = digit[d];
+	    len--;
+	} while((value > 0) || (len > 0));
+    }
+    if (sign)
+	*--ptr = '-';
+    return ptr;
+}
+
+
 // READ from GPIO (emulated serial port/socket whatever)
 void async_reader(async_reader_t* ap)
 {
     int count = 0;
+    int wi = 0;
     uint18_t bits = 0;
+    uint18_t word = 0;
+    uint18_t sync = 0;    
+    unsigned long udelay = UDELAY(BAUD);
+    size_t nbytes = 0;
+
+    printf("async_reader: started baud=%d, udelay=%ld\n", BAUD, udelay);
 
     set_blocking(ap->fd, 1);
 
     while(!ap->chan.terminate) {
 	int n;
 	uint8_t b;
-	
-	while(count > 0) {  // 1
-	    uint18_t value = (bits >> (count-1)) & 1;
+
+	while((count > 0) && !ap->chan.terminate) {  // 1
+	    uint18_t value = ((bits >> 9) & 1); // invert!
 	    chan_t* rp = ap->out;
-	    int dir    = invert_dir[UP];
+	    int dir = UP;
+
+	    if (value)
+		set_ior(rp, F18_IO_PIN17);
+	    else
+		clr_ior(rp, F18_IO_PIN17);
 	    
-	    // NOTE iod should be inverted, DOWN for 708 instead of UP
-	    // printf("async_reader: write DOWN channel from [%03d]\n",
-	    // chan_to_reg_node(rp)->n.id);	    
 	    if (f18_chan_write(rp, dir, value))
 		;
 	    else {
-		f18_init_transfer(&ap->chan, WRITE, DIR_BIT(dir), 0, value);
+		f18_init_transfer(&ap->chan, WRITE, 0, DIR_BIT(dir), value);
 		if (f18_chan_write(rp, dir, value)) {
 		    f18_complete_transfer(&ap->chan, WRITE);
 		}
@@ -369,22 +460,63 @@ void async_reader(async_reader_t* ap)
 		    f18_wait_transfer(&ap->chan, WRITE);
 		}
 	    }
+	    usleep(udelay);
+	    bits <<= 1;
+	    // bits >>= 1;
 	    count--;
-	    // printf("async_reader: bits=%03x, count=%d\n", bits, count);
 	}
-	if ((n = read(ap->fd, &b, 1)) == 1) {
-	    int i;
-	    // printf("async_reader: read byte %02x\n", b);
-	    bits = (bits << 1) | 0;
-	    for (i = 0; i < 8; i++)
-		bits = (bits << 1) | (b & 1);
-	    bits = (bits << 1) | 1;
-	    count += 10;
+	
+    again:
+	if (!ap->chan.terminate) {
+	    if ((n = read(ap->fd, &b, 1)) == 1) {
+		// char buf[8*sizeof(int)+1];
+		uint8_t b0 = ~b;  // invert all bits (again)
+		int n = 8;
+		bits = 0;
+		// reverse bits (as sent from uart)
+		while(n--) {
+		    bits = (bits << 1) | (b0 & 1);
+		    b0 >>= 1;
+		}
+		bits = (1 << 9) | (bits << 1) | 0;
+		count = 10;
+		nbytes++;
+		printf("async_reader: loaded %ld bytes\r", nbytes);
+		if ((nbytes & 0x7f) == 1)
+		    printf("\n");
+		/*
+		printf("async_reader: read bits %d|%s|%d byte=%02x\n",
+		       (bits >> 9) & 1,
+		       ltoa((bits>>1)&0xff,buf,8,sizeof(buf),2),
+		       (bits & 1), b);
+		*/
+		switch(wi) {
+		case 0: sync=b&0x3f; word=(b>>6)&0x3; wi=1; break;
+		case 1: word |= (b<<2); wi=2; break;
+		case 2: word |= (b<<10); wi=0;
+		    printf("async_reader: read sync=0x%02x, word=0x%05x\n",
+			   (sync ^ 0x3f), (word ^ 0x3ffff));
+		    wi = 0;
+		    word = 0;
+		    break;				
+		}
+	    }
+	    else if (n == 0) {
+		fprintf(stderr, "async_reader: read 0 bytes\n");
+		goto again;
+	    }
+	    else if (n < 0) {
+		fprintf(stderr, "async_reader: read error %d (%s)\n",
+			errno, strerror(errno));
+		return;
+	    }
 	}
     }
 }
 
 // WRITE to GPIO (emulated serial port/socket whatever)
+// when 708 write value to ioreg 'io' then it ends up here
+//
 void async_writer(async_writer_t* ap)
 {
     int count = 0;
@@ -399,13 +531,12 @@ void async_writer(async_writer_t* ap)
 
 	while((count < 10) && !ap->chan.terminate) {
 	    uint18_t value;
-	    int dir = GPIO;
 
-	    if (f18_chan_read(rp, dir, &value))
+	    if (f18_chan_read(rp, GPIO, &value))
 		;
 	    else
 	    {
-		f18_init_transfer(&ap->chan, READ, DIR_BIT(dir), 0, 0);
+		f18_init_transfer(&ap->chan, READ, DIR_BIT(GPIO), 0, 0);
 		if (f18_chan_read(rp, GPIO, &value)) {
 		    f18_complete_transfer(&ap->chan, READ);
 		}
@@ -415,9 +546,10 @@ void async_writer(async_writer_t* ap)
 			break;
 		}
 	    }
+	    // FIXME: may implement multiplt pins (configire in async_writer)
 	    // emulate bit sending 11 = 0, 10 => 1
-	    // fprintf(stderr, "async_writer: got value=%d, count=%d\n",
-	    // value, count);
+	    fprintf(stderr, "async_writer: got value=%d, count=%d\n",
+		    value, count);
 	    if (value == 3) {
 		bits = (bits << 1) | 0;
 		count++;
@@ -430,19 +562,22 @@ void async_writer(async_writer_t* ap)
 		fprintf(stderr, "async_writer: unexpected value %d\n", value);
 	    }
 	}
-	// reverse bits
-	b = 0;
-	bits >>= 1; // skip "stop" bit
-	for (i = 0; i < 8; i++) {
-	    b = (b << 1) | (bits & 1);
-	    bits >>= 1;
+	if (!ap->chan.terminate) {
+	    // reverse bits
+	    b = 0;
+	    bits >>= 1; // skip "stop" bit
+	    for (i = 0; i < 8; i++) {
+		b = (b << 1) | (bits & 1);
+		bits >>= 1;
+	    }
+	    if (ap->fd >= 0) {
+		fprintf(stderr, "async_writer: output byte %02x '%c'\n",
+			b, (b >= 32 && b < 127) ? b : '?');
+		// fix sending
+		// write(ap->fd, &b, 1);
+	    }
+	    bits = 0;
+	    count = 0;
 	}
-	if (ap->fd >= 0) {
-	    // fprintf(stderr, "async_writer: output byte %02x '%c'\n",
-	    // b, (b >= 32 && b < 127) ? b : '?');
-	    write(ap->fd, &b, 1);
-	}
-	bits = 0;
-	count = 0;
     }
 }

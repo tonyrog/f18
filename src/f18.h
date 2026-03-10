@@ -66,19 +66,15 @@
 #define IOREG_START 0x100
 #define IOREG_END   0x1FF
 
-#define IOREG_STDIN   0x100  // test/debug
-#define IOREG_STDOUT  0x101  // test/debug
-#define IOREG_STDIO   0x102  // test/debug
-#define IOREG_TTY     0x103  // test/debug
-
 #define IOREG__D_U    0x105  // 0000
 #define IOREG__D__    0x115  // 0001
 #define IOREG__DLU    0x125  // 0010
 #define IOREG__DL_    0x135  // 0011
-#define IOREG_DATA    0x141  // up-port without handshake
+#define IOREG_DATA    0x141  // up-port with no handshake
 #define IOREG____U    0x145  // 0100
 #define IOREG_IO      0x15D  // i/o control and status
 #define IOREG___LU    0x165  // 0110
+#define IOREG_LDATA   0x171  // left-port with no handshake
 #define IOREG___L_    0x175  // 0111
 #define IOREG_RD_U    0x185  // 1000
 #define IOREG_RD__    0x195  // 1001
@@ -97,7 +93,6 @@
 #define F18_LEFT_BIT      0x020  // left when  1
 #define F18_UP_BIT        0x010  // up when    0
 
-#define F18_IO_PIN17      0x20000
 // port status bits in io register
 #define F18_IO_RIGHT_RD   0x10000
 #define F18_IO_RIGHT_WR   0x08000
@@ -107,10 +102,25 @@
 #define F18_IO_LEFT_WR    0x00800
 #define F18_IO_UP_RD      0x00400
 #define F18_IO_UP_WR      0x00200
-// ...
+#define F18_IO_MASK_WR    0xAA000
+#define F18_IO_MASK_RD    0x15400
+
+// GPIO read ior (one bit)
+#define F18_IO_PIN17      0x20000
 #define F18_IO_PIN5       0x00020
 #define F18_IO_PIN3       0x00008
 #define F18_IO_PIN1       0x00002
+
+// Wakeup control (iow)
+#define F18_IO_WD         0x00800
+#define F18_IO_PHAN9      0x00200
+#define F18_IO_PHAN7      0x00080
+
+// GPIO write (iow)
+#define F18_IO_CTRL_PIN17 0x30000
+#define F18_IO_CTRL_PIN5  0x00030
+#define F18_IO_CTRL_PIN3  0x0000C
+#define F18_IO_CTRL_PIN1  0x00003
 
 #define GPIO  4
 #define RIGHT 3
@@ -243,10 +253,20 @@ typedef struct {
     
 typedef struct {
     f18_rom_type_t rom;
-    f18_io_type_t  io_type;    
-    uint9_t comm;   // com ports present
+    f18_io_type_t  io_type;
+    uint9_t comm;           // com ports present
     uint9_t io_addr;
-    uint9_t reset;  // reset address "cold" | ioreg
+    uint9_t reset;          // reset address "cold" | ioreg
+    // io_type      n
+    // gpio_x1:     1   { 20 }
+    // gpio_x2:     2   { 14, 15 }
+    // gpio_x4:     4   { 80, 81, 84, 85 }
+    // analog:      2   { 76, 77 }          -- adc/dac
+    // async_booot: 2   { 78, 69 }          -- rx/tx
+    // serdes_boot: 2   { 26, 27 }          -- clk/data
+    // 
+    uint8_t io_pin[4];      // upto 4 pins io_type=gpio/analog/serdes ...
+    uint18_t trigger[4];    // analog trigger for ...
 } f18_config_t;
 //
 // sizeof(node_t) = 656 bytes (update me now and then)
@@ -258,7 +278,8 @@ typedef struct _node_t {
     f18_rom_type_t rom_type;
     const uint18_t* rom;
     f18_symbol_table_t* symtab; // loaded symbols, if present
-    uint18_t       io;      // io status register (read/write)
+    uint18_t       ior;     // io status register read
+    uint18_t       iow;     // io status register write
     uint18_t       id;      // id 000 - 717 (decimal)
     useconds_t delay;       // delay between instructions
     uint18_t flags;         // flags,debug,trace...

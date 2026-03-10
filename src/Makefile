@@ -1,8 +1,9 @@
 APP=$(shell basename `cd ..; pwd`)
 ERLC=$(shell which erlc)
+EBIN=../ebin
 ERLC_FLAGS=-MMD -MF .$<.d -I ../.. +debug_info
 ERL_SOURCES=$(wildcard *.erl) $(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
-ERL_OBJECTS=$(ERL_SOURCES:%.erl=%.beam)
+ERL_OBJECTS=$(ERL_SOURCES:%.erl=$(EBIN)/%.beam)
 ALL_OBJECTS=$(ERL_OBJECTS)
 ERL_MODULES=$(ERL_SOURCES:%.erl=%)
 comma=,
@@ -25,8 +26,8 @@ all:  $(ALL_OBJECTS) ../bin/f18
 %.o:	%.c
 	$(CC) $(CFLAGS) -c $<
 
-%.beam: %.erl
-	$(ERLC) $(ERLC_FLAGS) $<
+$(EBIN)/%.beam: %.erl
+	$(ERLC) -o $(EBIN) $(ERLC_FLAGS) $<
 
 clean:
 	rm -f $(OBJS) ../bin/f18

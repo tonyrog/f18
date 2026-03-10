@@ -28,8 +28,8 @@ typedef struct {
 
     uint18_t dmask;    // DIR_BIT(x) available directions
     uint18_t imask;    // DIR_BIT(x) io_addr direction
-    chan_t* neighbour[5];   // neighbour channels
-
+    chan_t* neighbour[4]; // neighbour channels
+    chan_t* ioc;          // configured ioreg io output!
     node_debug_t debug;    // debugger state for this node
 } reg_node_t;
 

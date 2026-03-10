@@ -1,6 +1,6 @@
 # F18
 
-A simulator of the Green Array F18A chip.
+A simulator of the Green Array GA144 chip.
 
 The simulator is a bit different than the chip since it
 interprets the input from the io registers rather than 

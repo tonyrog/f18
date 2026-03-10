@@ -534,22 +534,26 @@ int main(int argc, char** argv)
 	    np->n.id = MAKE_ID(i,j);
 	    if ((np->n.id == 708) && (rt == async_boot)) {
 		char pty_name[256];
-		int fd;
-
+		int master, slave;
+		
 		memset(&r708, 0, sizeof(r708));
 		memset(&w708, 0, sizeof(w708));
 
 		f18_chan_init(&r708.chan);
 		f18_chan_init(&w708.chan);
 		
-		if ((fd = open_pty(pty_name, sizeof(pty_name))) < 0) {
+		if ((master = open_pty(pty_name, sizeof(pty_name))) < 0) {
 		    fprintf(stderr, "unable to open a pty error=%s (%d)\n",
 			    strerror(errno), errno);
 		    exit(1);
 		}
 		printf("PTY_NAME=%s\n", pty_name);
+		// open a slave and keep it open so we avoid EIO from
+		// linux clients
+		slave = open(pty_name, O_RDWR | O_NOCTTY);
+		(void) slave;
 
-		r708.fd = fd;
+		r708.fd = master;
 		w708.fd = STDOUT_FILENO;  // Write to stdout for testing
 	    }
 
@@ -564,11 +568,13 @@ int main(int argc, char** argv)
 	    np->neighbour[3] = NULL;
 	    np->neighbour[4] = NULL;	    
 
-	    np->n.io     = IMASK;
-	    if (np->n.id == g_id)
+	    np->n.ior    = IMASK;  // default read value
+	    np->n.iow    = 0;      // write cache
+	    if (id == 999)
+		np->n.flags  = g_flags;
+	    else if (np->n.id == id)
 		np->n.flags  = g_flags; // specific for node?
-	    else
-		np->n.flags = g_flags & ~(FLAG_DUMP_ROM|FLAG_DUMP_RAM);
+
 	    np->n.delay  = delay;    // specific for node?
 
 	    np->n.reg.p = ConfigMap[i][j].reset;
@@ -577,9 +583,7 @@ int main(int argc, char** argv)
 	    np->imask = (ConfigMap[i][j].io_addr ?
 			 dirbits(i,j,ConfigMap[i][j].io_addr) : 0);
 	    
-	    // if ((i == 0) && (j == 0))
-	    //   np->n.reg.p = IOREG_STDIO;
-	    np->n.reg.b = IOREG_TTY;
+	    np->n.reg.b = IOREG_IO;
 	    np->n.read_ioreg  = f18_read_ioreg;
 	    np->n.write_ioreg = f18_write_ioreg;
 
@@ -653,10 +657,10 @@ int main(int argc, char** argv)
 		np->neighbour[UP]   = &((reg_node_t*)node[i+1][j])->chan;
 	    else if (i == v-1) {
 		if (np->n.id == 708) {
-		    np->neighbour[UP] = &r708.chan;  // read async
+		    np->neighbour[UP] = &r708.chan;    // read async
 		    r708.out = &np->chan;              //
 		    r708.n.id = 808;
-		    np->neighbour[GPIO] = &w708.chan; // write from here
+		    np->ioc = &w708.chan;              // io control channel
 		    w708.n.id = 908;
 		    w708.in = &np->chan;              // write from 708
 		}
