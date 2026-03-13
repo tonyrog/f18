@@ -42,6 +42,24 @@
 #define INS_B_STORE    0x1e   // b! 	ALU 	1.5 	“b-store” (store into B)
 #define INS_A_STORE    0x1f   // a! 	ALU 	1.5 	“a-store” (store into A)
 
+#define MAKE_INS(ins0,ins1,ins2,ins3) \
+    (((ins0)<<13) | ((ins1)<<8) | ((ins2)<<3) | ((ins3)>>2))
+
+#define MAKE_INS_J3(ins0,ins1,jins,dest) \
+    (((ins0)<<13) | ((ins1)<<8) | ((jins)<<3) | ((dest)&0x7))
+
+#define MAKE_INS_J2(ins0,jins,dest) \
+    (((ins0)<<13) | ((jins)<<8) | ((dest)&0xff))
+
+#define MAKE_INS_J1(jins,dest) \
+    (((jins)<<13) | ((dest)&0xfff))
+
+#define SLOT0(ins) (((ins)>>13) & 0x1f)
+#define SLOT1(ins) (((ins)>>8) & 0x1f)
+#define SLOT2(ins) (((ins)>>3) & 0x1f)
+#define SLOT3(ins) (((ins)<<2) & 0x1f)
+
+
 #define META_ORG       0x20   // arg = address
 #define META_NODE      0x21   // arg = node number
 #define META_DEF       0x22   // ':' arg = symbol name
@@ -165,6 +183,7 @@
 #define FLAG_WR_BIN_LEFT  0x04000
 #define FLAG_WR_BIN_DOWN  0x02000
 #define FLAG_WR_BIN_UP    0x01000
+#define FLAG_GPIO_POLL    0x20000   // GPIO reads return immediately (poll mode)
 
 #define MAKE_ID(i,j)     ((i)*100+(j))
 #define ID_TO_ROW(id)    ((id)/100)
@@ -326,6 +345,9 @@ typedef struct _node_t {
 
 
 extern void f18_emu(node_t* p);
+extern char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,
+			     const f18_symbol_table_t* symtab,
+			     char** pptr, size_t maxlen);
 extern int f18_disasm_instruction(uint18_t addr, uint18_t I,
 				  const f18_symbol_table_t* symtab,
 				  char* ptr, size_t maxlen);

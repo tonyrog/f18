@@ -43,10 +43,11 @@ typedef struct {
 typedef struct _async_reader_t {
     node_t n;              // currently a dummy node
     chan_t chan;            // 708 put data here...
-    chan_t* out;            // write to    
+    chan_t* out;            // write to
     pthread_t thread;
     pthread_attr_t attr;
     int fd;
+    int baud;
 } async_reader_t;
 
 extern void async_reader(async_reader_t* ap);
@@ -57,7 +58,8 @@ typedef struct _async_writer_t {
     chan_t* in;     // read from
     pthread_t thread;
     pthread_attr_t attr;
-    int fd;    
+    int fd;
+    int baud;
 } async_writer_t;
 
 extern void async_writer(async_writer_t* ap);

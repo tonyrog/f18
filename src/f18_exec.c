@@ -242,9 +242,128 @@ void usage(char* prog)
 	    "       ds            data stack\n"
 	    "    -d <delay>       Set delay between instructions (in usecs)\n"
 	    "    -l VxH           Set processor mesh layout (max 8x18)\n"
-	    "    -f load-file     Load node RAM from file (testing)\n"	    
+	    "    -f load-file     Load node RAM from file (testing)\n"
+	    "    -b <baud>        Set async boot baud rate\n"
+	    "    -P               GPIO poll mode (no wakeup wait)\n"
 	);
     exit(1);
+}
+
+// Global emulator speed in instructions per microsecond
+double g_emu_speed = 0.0;
+
+// Helper: get current time in nanoseconds (monotonic)
+static inline long long get_time_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+// Benchmark: measure emulator speed using unext loop on node[0][0]
+// Must be called after nodes are initialized
+// Returns instructions per microsecond
+double f18_benchmark(node_t* np, int iterations)
+{
+    long long nt0, nt1;
+    // struct timeval t0, t1;
+    double loop1;
+    double loop2;
+    uint18_t saved_ram[3];
+    f18_regs_t saved_reg;
+    uint18_t ins;
+
+    // Save current state
+    saved_ram[0] = np->ram[0];
+    saved_ram[1] = np->ram[1];
+    saved_ram[2] = np->ram[2];    
+    saved_reg = np->reg;
+
+    // Code at RAM[0]: unext ; . .  (loop R times, then return)
+    // unext ; . . 
+    // Word = (0x04<<13)|(0x00<<8)|(0x1C<<3)|0x04 = 0x080E4
+    // XOR with IMASK: 0x080E4 ^ 0x15555 = 0x1D5B1
+    //
+    ins = MAKE_INS(INS_UNEXT,INS_RETURN,INS_NOP,INS_NOP);
+    np->ram[0] = ins ^ IMASK; // 0x1D5B1;
+
+    // Initialize registers for benchmark
+    // unext does POP_r when R=0, then ; does another POP_r
+    // So we need RP=2: unext pops rs[1], ; pops rs[0]=termination
+    np->reg.p = 0;              // Start at RAM[0]
+    np->reg.r = iterations;     // Loop count for unext
+    np->reg.rp = 2;             // unext POP→RP=1, ; POP→RP=0
+    np->rs[0] = 0x3FFFF;        // Magic termination value (popped by ;)
+    np->rs[1] = 0;              // Dummy (popped by unext)
+    np->reg.sp = 0;
+    np->reg.t = 0;
+    np->reg.s = 0;
+    np->reg.b = IOREG_IO;
+
+    printf("Benchmark: loop1 running %d unext iterations...\n", iterations);
+
+    // gettimeofday(&t0, NULL);
+    nt0 = get_time_ns();
+    f18_emu(np);
+    // gettimeofday(&t1, NULL);
+    nt1 = get_time_ns();
+
+    // loop1 = (t1.tv_sec - t0.tv_sec) * 1000000.0 + (t1.tv_usec - t0.tv_usec);
+    loop1 = (nt1 - nt0) / 1000;
+
+    printf("Benchmark1: %d iterations in %.0f us (%.2f MIPS)\n",
+           iterations, loop1,
+           loop1 > 0 ? (double)iterations / loop1 : 0);
+
+    // No sync
+    // loop:
+    //   @ drop . .
+    //   . drop next:loop
+    // done:
+    //   ;
+    ins = MAKE_INS(INS_FETCH,INS_NOP,INS_NOP,INS_NOP);
+    np->ram[0] = ins ^ (IMASK & 0x3FFFF);
+    ins = MAKE_INS_J3(INS_NOP,INS_DROP,INS_NEXT,0);
+    np->ram[1] = ins ^ (IMASK & 0x3FFF8);
+    ins = MAKE_INS_J3(INS_RETURN,INS_NOP,INS_NOP,INS_NOP);
+    np->ram[2] = ins ^ (IMASK & 0x1FFFF);
+
+    np->reg.p = 0;              // Start at RAM[0]
+    np->reg.r = iterations;     // Loop count for unext
+    np->reg.rp = 2;             // unext POP→RP=1, ; POP→RP=0
+    np->rs[0] = 0x3FFFF;        // Magic termination value (popped by ;)
+    np->rs[1] = 0;              // Dummy (popped by unext)
+    np->reg.sp = 0;
+    np->reg.t = 0;
+    np->reg.s = 0;
+    np->reg.a = 0;
+    np->reg.b = IOREG_IO;
+
+    printf("Benchmark2: loop2 running %d next iterations...\n", iterations);
+    
+    // gettimeofday(&t0, NULL);
+    nt0 = get_time_ns();    
+    f18_emu(np);
+    // gettimeofday(&t1, NULL);
+    nt1 = get_time_ns();
+    
+    // loop2 = (t1.tv_sec - t0.tv_sec) * 1000000.0 + (t1.tv_usec - t0.tv_usec);
+    loop2 = (nt1 - nt0) / 1000;
+    
+    printf("Benchmark2: %d iterations in %.0f us (%.2f MIPS)\n",
+           iterations, loop2,
+	   loop2 > 0 ? (double)iterations / loop2 : 0);
+    
+    // Restore state
+    np->ram[0] = saved_ram[0];
+    np->ram[1] = saved_ram[1];
+    np->ram[2] = saved_ram[2];
+    np->reg = saved_reg;
+
+    if (loop2 > 0) {
+        return (double)iterations / loop2;
+    }
+    return 100.0;  // Default if measurement fails
 }
 
 void* f18_emu_start(void *arg)
@@ -354,6 +473,43 @@ void draw_com_map()
     }
 }
 
+struct {
+    clockid_t id;
+    const char* name;
+}  clock_source[] =
+{
+    {CLOCK_REALTIME, "REALTIME"},
+    {CLOCK_REALTIME_COARSE, "REALTIME_COARSE"},
+    {CLOCK_MONOTONIC, "MONOTONIC"},
+    {CLOCK_MONOTONIC_COARSE, "MONOTONIC_COARSE"},
+    {CLOCK_MONOTONIC_RAW, "MONOTONIC_RAW"},
+    {0, NULL}
+};
+
+void check_clock()
+{
+    int i;
+    
+    i = 0;
+    while(clock_source[i].name != NULL) {
+	struct timespec res;
+	clock_getres(clock_source[i].id, &res);
+	printf("res: %s: %lds, %ldns\n", clock_source[i].name,
+	       res.tv_sec, res.tv_nsec);
+	i++;
+    }
+    
+    i = 0;
+    while(clock_source[i].name != NULL) {
+	struct timespec tim;
+	clock_gettime(clock_source[i].id, &tim);
+	printf("time: %s: %lds, %ldns\n",  clock_source[i].name,
+	       tim.tv_sec, tim.tv_nsec);
+	i++;
+    }
+}
+
+
 int main(int argc, char** argv)
 {
     int fd;
@@ -370,17 +526,21 @@ int main(int argc, char** argv)
     int file_fd = -1;
     uint18_t id = 999;
     int noexec = 0;
+    int baud = 9600;
     
     g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
     g_flags = 0;
+
+    check_clock();
     
-    while((c = getopt(argc, argv, "ivtnl:d:I:D:f:G")) != -1) {
+    while((c = getopt(argc, argv, "ivtnPl:b:d:I:D:f:G")) != -1) {
 	switch(c) {
 	case 'i': interactive = 1; break;
 	case 'n': noexec = 1; break;
 	case 'f': filename = optarg; break;
 	case 'v': g_flags |= FLAG_VERBOSE; break;
 	case 't': g_flags |= FLAG_TRACE; break;
+	case 'P': g_flags |= FLAG_GPIO_POLL; break;  // GPIO poll mode (no wakeup wait)
 	case 'l': opt_layout = optarg; break;
 	case 'G': g_flags |= FLAG_DEBUG_ENABLE; break;
 	case 'd': {
@@ -394,6 +554,9 @@ int main(int argc, char** argv)
 	case 'I':
 	    id = atoi(optarg);
 	    g_step_spec = optarg;  // Also save for debugger step nodes
+	    break;
+	case 'b':
+	    baud = atoi(optarg);
 	    break;
 	case 'D': {
 	    char* ptr = optarg;
@@ -554,7 +717,9 @@ int main(int argc, char** argv)
 		(void) slave;
 
 		r708.fd = master;
+		r708.baud = baud;
 		w708.fd = STDOUT_FILENO;  // Write to stdout for testing
+		w708.baud = baud;		
 	    }
 
 	    np->dmask = 0;
@@ -720,6 +885,10 @@ int main(int argc, char** argv)
 	    }
 	}
     }
+
+    // Benchmark emulator speed using node[0][0]
+//    g_emu_speed = f18_benchmark(node[0][0], 262143);  // 0x3FFFF iterations
+//    printf("Emulator speed: %.2f MIPS\n", g_emu_speed);
 
     // Set num_active before creating threads to avoid race where main
     // thread checks the termination condition before threads have started

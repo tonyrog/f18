@@ -273,7 +273,7 @@ boot_708(DeviceName, Opts) ->
     Opts1 = maps:merge(#{ rom => async_boot, encode => true, 
 			  device => DeviceName, baud => 300 }, Opts),
     Bootstream =
-	[[{literal, 16#a9}],  %% completion address (warm)
+	[[{literal, 16#aa}],  %% compleation address (cold)
 	 [{literal, 0}],      %% transfer  adddress (start in RAM[0])
 	 [{literal, 10}]] ++  %% load 10 words
 	[ [{literal,I}] || I <- lists:seq(1,10) ],

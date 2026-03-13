@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <termios.h>
@@ -71,19 +72,32 @@ static uint18_t select_dirs(node_t* np, uint18_t ioreg)
 }
 
 // update ior status for node "owning" channel 'chan'
+// signals condition if PIN17 changes (for wakeup)
 static void set_ior(chan_t* chan, uint18_t mask)
 {
     reg_node_t* np = chan_to_reg_node(chan);
+    uint18_t old_ior;
+
     pthread_mutex_lock(&chan->lock);
+    old_ior = np->n.ior;
     np->n.ior |= mask;
+    // Signal if PIN17 changed (for wakeup reads)
+    if ((mask & F18_IO_PIN17) && !(old_ior & F18_IO_PIN17))
+	pthread_cond_broadcast(&chan->cond);
     pthread_mutex_unlock(&chan->lock);
 }
 
 static void clr_ior(chan_t* chan, uint18_t mask)
 {
     reg_node_t* np = chan_to_reg_node(chan);
+    uint18_t old_ior;
+
     pthread_mutex_lock(&chan->lock);
+    old_ior = np->n.ior;
     np->n.ior &= ~mask;
+    // Signal if PIN17 changed (for wakeup reads)
+    if ((mask & F18_IO_PIN17) && (old_ior & F18_IO_PIN17))
+	pthread_cond_broadcast(&chan->cond);
     pthread_mutex_unlock(&chan->lock);
 }
 
@@ -290,7 +304,7 @@ void update_io_status(reg_node_t* dp)
     int dir;
     chan_t* rp;
 
-    dirs = select_dirs((node_t*)dp, IOREG_RDLU);
+    dirs = dp->dmask; // select_dirs((node_t*)dp, IOREG_RDLU);
 
     for (dir = 0; dir < 4; dir++) {
 	uint18_t idir;
@@ -308,7 +322,10 @@ void update_io_status(reg_node_t* dp)
 	}
 	pthread_mutex_unlock(&rp->lock);
     }
+
+    pthread_mutex_lock(&dp->chan.lock);    
     dp->n.ior = (dp->n.ior & ~mask) | (status & mask);
+    pthread_mutex_unlock(&dp->chan.lock);    
 }
 
 uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
@@ -334,8 +351,6 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     iodir  = np->io_addr ?
 	dirbits(ID_TO_ROW(np->id),ID_TO_COLUMN(np->id),np->io_addr) : 0;
     dirs |= iodir;
-    
-    // FIXME: add io to dirs!
 
     VERBOSE(np, "read_ioreg addr=%03x dirs=%c%c%c%c\n",
 	    ioreg,
@@ -345,6 +360,41 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	    (dirs & DIR_BIT(UP)    ? 'U' : '_'));
     if (dirs == 0) {
 	ERROR(np,"io error when reading ioreg=%x, no directions\n", ioreg);
+	return 0;
+    }
+
+    // IOREG_DATA (x141) / IOREG_LDATA (x171): no handshake, return IOR immediately
+    if (ioreg == IOREG_DATA || ioreg == IOREG_LDATA) {
+	update_io_status(dp);
+	return dp->n.ior;
+    }
+
+    // GPIO wakeup read: suspend until PIN17 matches WD state
+    // WD=0 (reset): wait until PIN17 is HIGH
+    // WD=1: wait until PIN17 is LOW
+    // Applies to ANY read that includes the GPIO direction
+    // FLAG_GPIO_POLL: skip wait, return IOR immediately (for poll loops)
+    if (iodir && (dirs & iodir)) {
+	if (np->flags & FLAG_GPIO_POLL) {
+	    // Poll mode: return current IOR immediately
+	    update_io_status(dp);
+	    return np->ior;
+	}
+	int wd_state = (np->iow & F18_IO_WD) ? 1 : 0;  // WD bit as written
+	int want_high = !wd_state;  // WD=0 means wait for HIGH
+
+	pthread_mutex_lock(&dp->chan.lock);
+	while (!(np->flags & FLAG_TERMINATE)) {
+	    int pin17_high = (np->ior & F18_IO_PIN17) ? 1 : 0;
+	    if (pin17_high == want_high) {
+		// PIN17 matches desired state - wakeup!
+		pthread_mutex_unlock(&dp->chan.lock);
+		return np->ior;  // Return IOR (caller should drop this)
+	    }
+	    // Wait for PIN17 to change
+	    pthread_cond_wait(&dp->chan.cond, &dp->chan.lock);
+	}
+	pthread_mutex_unlock(&dp->chan.lock);
 	return 0;
     }
 
@@ -385,7 +435,7 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
  * read/write async serial data
  */
 
-#define BAUD       300
+// #define BAUD       300
 #define NDATABITS  8
 #define NSTOPBITS  1
 #define UDELAY(B) ((unsigned long)((1/((double)(B)))*1000000))
@@ -419,87 +469,92 @@ char* ltoa(long value, char* ptr, size_t minlen, size_t maxlen, int radix)
     return ptr;
 }
 
+// #define CLOCK_SOURCE CLOCK_MONOTONIC_RAW
+#define CLOCK_SOURCE CLOCK_MONOTONIC
+
+// Helper: get current time in nanoseconds (monotonic)
+static inline int get_time_ns(struct timespec* tp)
+{
+    return clock_gettime(CLOCK_SOURCE, tp);
+}
+
+// Helper: sleep until tp + ns
+static inline int sleep_until_ns(struct timespec* tp, long long ns)
+{
+    long long ns1 = tp->tv_nsec + ns;
+    struct timespec until;
+
+    until.tv_sec = tp->tv_sec + (ns1 / 1000000000LL);
+    until.tv_nsec = ns1 % 1000000000LL;
+
+    return clock_nanosleep(CLOCK_SOURCE,TIMER_ABSTIME,&until,NULL);
+}
 
 // READ from GPIO (emulated serial port/socket whatever)
 void async_reader(async_reader_t* ap)
 {
     int count = 0;
-    int wi = 0;
-    uint18_t bits = 0;
-    uint18_t word = 0;
-    uint18_t sync = 0;    
-    unsigned long udelay = UDELAY(BAUD);
-    size_t nbytes = 0;
+    // int wi = 0;
+    uint32_t bits = 0;
+    // uint18_t word = 0;
+    // uint18_t sync = 0;
+    // No scaling needed - ROM auto-calibrates from sync pattern
+    // Just use consistent timing within each 18-bit word
+    long long bit_time_ns = 1000000000 / ap->baud;
+    struct timespec word_start_time;
+    int bit_in_word;        // Bit counter within 18-bit word (0-29 for 3 bytes)
 
-    printf("async_reader: started baud=%d, udelay=%ld\n", BAUD, udelay);
+    printf("async_reader: started baud=%d, bit_time=%lld ns\n",
+	   ap->baud, bit_time_ns);
 
+    tcflush(ap->fd, TCIFLUSH);
     set_blocking(ap->fd, 1);
 
     while(!ap->chan.terminate) {
 	int n;
-	uint8_t b;
 
-	while((count > 0) && !ap->chan.terminate) {  // 1
-	    uint18_t value = ((bits >> 9) & 1); // invert!
+	bit_in_word = 0;
+	while((count > 0) && !ap->chan.terminate) {
+	    uint18_t bit = ((bits >> 29) & 1);
 	    chan_t* rp = ap->out;
-	    int dir = UP;
+	    long long word_ns;
 
-	    if (value)
-		set_ior(rp, F18_IO_PIN17);
+	    // Invert for F18: UART mark (1) = PIN17 LOW, UART space (0) = PIN17 HIGH
+	    // F18 expects: idle=LOW, start bit=HIGH (inverted from TTL UART)
+	    if (bit)
+		set_ior(rp, F18_IO_PIN17);  // space/start → HIGH
 	    else
-		clr_ior(rp, F18_IO_PIN17);
-	    
-	    if (f18_chan_write(rp, dir, value))
-		;
-	    else {
-		f18_init_transfer(&ap->chan, WRITE, 0, DIR_BIT(dir), value);
-		if (f18_chan_write(rp, dir, value)) {
-		    f18_complete_transfer(&ap->chan, WRITE);
-		}
-		else {
-		    f18_wait_transfer(&ap->chan, WRITE);
-		}
-	    }
-	    usleep(udelay);
+		clr_ior(rp, F18_IO_PIN17);  // mark/idle → LOW
+
+	    // Absolute time within 18-bit word (3 bytes = 30 bits)
+	    bit_in_word++;
+	    word_ns = bit_in_word*bit_time_ns;
+	    sleep_until_ns(&word_start_time, word_ns);
+
 	    bits <<= 1;
-	    // bits >>= 1;
 	    count--;
 	}
-	
+
     again:
 	if (!ap->chan.terminate) {
-	    if ((n = read(ap->fd, &b, 1)) == 1) {
-		// char buf[8*sizeof(int)+1];
-		uint8_t b0 = ~b;  // invert all bits (again)
-		int n = 8;
+	    uint8_t w18[3];
+	    if ((n = read(ap->fd, w18, 3)) == 3) {
+		int i;
+		get_time_ns(&word_start_time);
 		bits = 0;
-		// reverse bits (as sent from uart)
-		while(n--) {
-		    bits = (bits << 1) | (b0 & 1);
-		    b0 >>= 1;
+		
+		for (i = 0; i < 3; i++) {
+		    uint8_t b0 = ~w18[i];  // invert all bits (again)
+		    int n = 8;
+		    // reverse bits (as sent from uart)
+		    bits = (bits << 1) | 1;  // start bit
+		    while(n--) {
+			bits = (bits << 1) | (b0 & 1);
+			b0 >>= 1;
+		    }
+		    bits = (bits << 1) | 0;  // stop bit
 		}
-		bits = (1 << 9) | (bits << 1) | 0;
-		count = 10;
-		nbytes++;
-		printf("async_reader: loaded %ld bytes\r", nbytes);
-		if ((nbytes & 0x7f) == 1)
-		    printf("\n");
-		/*
-		printf("async_reader: read bits %d|%s|%d byte=%02x\n",
-		       (bits >> 9) & 1,
-		       ltoa((bits>>1)&0xff,buf,8,sizeof(buf),2),
-		       (bits & 1), b);
-		*/
-		switch(wi) {
-		case 0: sync=b&0x3f; word=(b>>6)&0x3; wi=1; break;
-		case 1: word |= (b<<2); wi=2; break;
-		case 2: word |= (b<<10); wi=0;
-		    printf("async_reader: read sync=0x%02x, word=0x%05x\n",
-			   (sync ^ 0x3f), (word ^ 0x3ffff));
-		    wi = 0;
-		    word = 0;
-		    break;				
-		}
+		count = 30;
 	    }
 	    else if (n == 0) {
 		fprintf(stderr, "async_reader: read 0 bytes\n");

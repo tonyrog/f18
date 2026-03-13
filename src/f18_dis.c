@@ -9,6 +9,98 @@
 #define dec(d) ((d)+'0')
 #define hex(d) (((d)<10) ? ((d)+'0') : (((d)-10)+'a'))
 
+// disassemble one micro instruction
+// disassemble slot i in instruction I att address addr
+// pptr contains a pointer to the start of the output buffer
+// symtab is currenlty a rom symbol table.
+// return the pointer to the start of the disassembled output
+// the output is 0 terminated
+char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,
+		      const f18_symbol_table_t* symtab,
+		      char** pptr, size_t maxlen)
+{
+    char* ptr = *pptr;
+    char* ptr0 = ptr;
+    char* ptr_end = ptr + maxlen;
+    uint18_t I0 = I;
+    int d;
+    uint5_t ins;
+    const char* ins_name;
+    int l, r, m;
+    
+    I <<= 2;
+    I <<= (i*5);
+    
+    ins = (I >> 15) & 0x1f;
+    ins_name = f18_ins[ins].name;
+    l = SYMLEN(&f18_ins[ins]);
+    r = (ptr_end - ptr);
+    m = (r > l) ? l : r;
+    memcpy(ptr, ins_name, m);
+    ptr += m;
+    switch(ins) {
+    case INS_RETURN:
+    case INS_EXECUTE:
+	goto done;
+    case INS_PJUMP:
+    case INS_PCALL:
+    case INS_NEXT:
+    case INS_IF:
+    case INS_MINUS_IF:
+	goto load;
+    }
+    if (ptr < ptr_end) *ptr = '\0';
+    *pptr = ptr;
+    return ptr0;
+    
+load:
+    switch(i) {
+    case 0: I = (addr & ~MASK10) | ((I0 ^ IMASK) & MASK10); break;
+    case 1: I = (addr & ~MASK8)  | ((I0 ^ IMASK) & MASK8); break;
+    case 2: I = (addr & ~MASK3)  | ((I0 ^ IMASK) & MASK3); break;
+    }
+    if (ptr < ptr_end) *ptr++ = ':';
+    if ((i = find_symbol_by_addr(I, symtab)) != -1) {
+	int l = SYMLEN(&symtab->symbol[i]);
+	int r = (ptr_end - ptr);
+	int m = (r > l) ? l : r;
+	memcpy(ptr, symtab->symbol[i].name, m);
+	ptr += m;
+    }
+    else if ((i = find_symbol_by_addr(I, &io_symtab)) != -1) {
+	int l = SYMLEN(&io_symtab.symbol[i]);
+	int r = (ptr_end - ptr);
+	int m = (r > l) ? l : r;
+	memcpy(ptr, io_symtab.symbol[i].name, m);
+	ptr += m;
+    }
+    else { // decimal. configure? 3, 8, 10-bit
+	// I = 0..1023
+#ifdef HEXADECIMAL_ADDR
+	d = (I >> 8) & 0xf;
+	if (ptr < ptr_end) *ptr++ = hex(d);
+	d = (I >> 4) & 0xf;
+	if (ptr < ptr_end) *ptr++ = hex(d);
+	d = (I & 0xf);
+	if (ptr < ptr_end) *ptr++ = hex(d);
+#else
+	d = (I / 1000); I %= 1000;	
+	if (d != 0) { if (ptr < ptr_end) *ptr++ = dec(d); }
+	d = (I / 100); I %= 100;
+	if (ptr < ptr_end) *ptr++ = dec(d);
+	d = (I / 10); I %= 10;		
+	if (ptr < ptr_end) *ptr++ = dec(d);
+	d = I;
+	if (ptr < ptr_end) *ptr++ = dec(d);
+#endif
+    }
+done:
+    if (ptr < ptr_end) *ptr = '\0';
+    *pptr = ptr;
+    return ptr0;
+}
+
+
 //
 //  <<slot0:5>> <<slot1:5> <<<slot2:5> <<slot3:3>>
 // 

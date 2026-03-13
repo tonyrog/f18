@@ -250,6 +250,14 @@ static void write_mem(node_t* np, uint18_t addr, uint18_t val, uint5_t ins)
     }
 }
 
+char* disasm_uins(node_t* np, int slot, uint18_t addr, uint18_t I,
+		  char* ptr, size_t maxlen)
+{
+    int i = ID_TO_ROW(np->id);
+    int j = ID_TO_COLUMN(np->id);
+    return f18_disasm_uins(slot, addr, I, SymTabMap[i][j], &ptr, maxlen);
+}
+
 void f18_emu(node_t* np)
 {
     // registers
@@ -268,6 +276,8 @@ void f18_emu(node_t* np)
     uint10_t  A0;           // a_inc
     uint32_t II;
     int n;
+    // trace buffer
+    char tbuf[32];
 
     SWAP_IN(np);
 
@@ -304,14 +314,19 @@ unext:
 	SWAP_IN(np);
     }
 
-    TRACE(np, "%03x: T=%05x,S=%05x,R=%05x,SP=%d,RP=%d, execute %s\n",
-	  P0, T,S,R,SP,RP, f18_ins[(II >> 15) & MASK5].name);
+    TRACE(np, "%03x: A=%05x,B=%03x,T=%05x,S=%05x,R=%05x,SP=%d,RP=%d, (%s)\n",
+	  P0, A, B, T,S,R,SP,RP,
+	  disasm_uins(np, 4-n, P, I^IMASK, tbuf, sizeof(tbuf)));
+    //f18_ins[(II >> 15) & MASK5].name);
     DELAY(np);
 
     switch((II >> 15) & MASK5) {
     case INS_RETURN:
 	P = R;
 	POP_r(np);
+	// Benchmark/test termination: return to R=0x3FFFF with RP becoming 0
+	if ((R == 0x3FFFF) && (RP == 0))
+	    return;
 	goto next;
 
     case INS_EXECUTE:
