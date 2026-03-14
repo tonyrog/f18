@@ -229,18 +229,17 @@ static void write_mem(node_t* np, uint18_t addr, uint18_t val, uint5_t ins)
 {
     if (addr <= RAM_END2) {
 	np->ram[addr & MASK6] = val;
-//	VERBOSE(np,"write ram[%04x] = %02x %02x %02x %02x = %x\n",
-	fprintf(stderr, "[%03d] write ram[%04x] = %02x %02x %02x %02x = %x\n",	
-		np->id, addr & MASK6,
-		(val >> 13) & 0x1f,
-		(val >> 8) & 0x1f,
-		(val >> 3) & 0x1f,
-		(val << 2) & 0x1f,
-		val);
+	PRINTF("[%03d] write ram[%04x] = %02x %02x %02x %02x = %x\n",	
+	       np->id, addr & MASK6,
+	       (val >> 13) & 0x1f,
+	       (val >> 8) & 0x1f,
+	       (val >> 3) & 0x1f,
+	       (val << 2) & 0x1f,
+	       val);
     }
     else if (addr <= ROM_END2) {
-	fprintf(stderr, "warning: try to write in ROM area %x, value=%d\n",
-		addr, val);
+	ERRORF("warning: try to write in ROM area %x, value=%d\n",
+	       addr, val);
     }
     else {
 	VERBOSE(np,"write ioreg[%04x] = %x\n", addr & MASK9, val);
@@ -317,8 +316,6 @@ unext:
     TRACE(np, "%03x: A=%05x,B=%03x,T=%05x,S=%05x,R=%05x,SP=%d,RP=%d, (%s)\n",
 	  P0, A, B, T,S,R,SP,RP,
 	  disasm_uins(np, 4-n, P, I^IMASK, tbuf, sizeof(tbuf)));
-    //f18_ins[(II >> 15) & MASK5].name);
-    DELAY(np);
 
     switch((II >> 15) & MASK5) {
     case INS_RETURN:

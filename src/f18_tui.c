@@ -15,6 +15,7 @@
 // External node array from f18_exec.c
 extern node_t* node[8][18];
 extern uint32_t g_v, g_h;
+extern char g_pty_name[256];  // PTY name for 708
 
 // Unicode box drawing characters
 #define BOX_H      L'\u2500'  // ─
@@ -192,6 +193,10 @@ void tui_draw_title(void)
         mvprintw(0, 25, "%s s%d PC:%03x", mode, g_debugger.current_slot,
                  g_debugger.current_pc);
     }
+
+    // Show PTY name if available
+    if (g_pty_name[0])
+        mvprintw(0, 45, "PTY:%s", g_pty_name);
 
     mvprintw(0, term_cols - 12, "%02ld:%02ld:%02ld",
              diff.tv_sec / 3600, (diff.tv_sec / 60) % 60, diff.tv_sec % 60);
@@ -604,7 +609,8 @@ int tui_handle_input(int ch)
 
     case 'r':
     case KEY_F(12):
-        // Refresh - just redraw
+        // Force refresh - redraw immediately
+        tui_refresh();
         break;
 
     case 'q':

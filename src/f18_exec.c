@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -7,6 +8,7 @@
 #include <memory.h>
 #include <errno.h>
 #include <signal.h>
+#include <sched.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/select.h>
@@ -47,9 +49,9 @@ static int tty_fd = -1;
 static struct termios tty_smode;
 static struct termios tty_rmode;
 static size_t  g_page_size = 0;
-static uint18_t g_flags = 0;
-static uint18_t g_id    = 999;
+uint18_t g_flags = 0;
 uint32_t g_v = 1, g_h = 1;  // Non-static for TUI access
+char g_pty_name[256] = "";  // PTY name for TUI display
 static char* g_step_spec = NULL;  // -I step node specification
 
 // System thread state tracking (atomics for counters, mutex/cond for wait)
@@ -245,6 +247,7 @@ void usage(char* prog)
 	    "    -f load-file     Load node RAM from file (testing)\n"
 	    "    -b <baud>        Set async boot baud rate\n"
 	    "    -P               GPIO poll mode (no wakeup wait)\n"
+	    "    -A               Enable CPU affinity (pin threads to cores)\n"
 	);
     exit(1);
 }
@@ -533,16 +536,21 @@ int main(int argc, char** argv)
 
     check_clock();
     
-    while((c = getopt(argc, argv, "ivtnPl:b:d:I:D:f:G")) != -1) {
+    while((c = getopt(argc, argv, "ivqtnPAl:b:d:I:D:f:G")) != -1) {
 	switch(c) {
 	case 'i': interactive = 1; break;
 	case 'n': noexec = 1; break;
 	case 'f': filename = optarg; break;
 	case 'v': g_flags |= FLAG_VERBOSE; break;
+	case 'q': g_flags |= FLAG_SILENT; break;
 	case 't': g_flags |= FLAG_TRACE; break;
 	case 'P': g_flags |= FLAG_GPIO_POLL; break;  // GPIO poll mode (no wakeup wait)
+	case 'A': g_flags |= FLAG_AFFINITY; break;   // CPU affinity for threads
 	case 'l': opt_layout = optarg; break;
-	case 'G': g_flags |= FLAG_DEBUG_ENABLE; break;
+	case 'G':
+	    g_flags |= FLAG_DEBUG_ENABLE;
+	    g_flags |= FLAG_SILENT;
+	    break;
 	case 'd': {
 	    char* endptr = NULL;
 	    if ((delay = strtol(optarg, &endptr,0)) == 0) {
@@ -696,24 +704,23 @@ int main(int argc, char** argv)
 	    np->n.rom = RomMap[rt].addr;
 	    np->n.id = MAKE_ID(i,j);
 	    if ((np->n.id == 708) && (rt == async_boot)) {
-		char pty_name[256];
 		int master, slave;
-		
+
 		memset(&r708, 0, sizeof(r708));
 		memset(&w708, 0, sizeof(w708));
 
 		f18_chan_init(&r708.chan);
 		f18_chan_init(&w708.chan);
-		
-		if ((master = open_pty(pty_name, sizeof(pty_name))) < 0) {
+
+		if ((master = open_pty(g_pty_name, sizeof(g_pty_name))) < 0) {
 		    fprintf(stderr, "unable to open a pty error=%s (%d)\n",
 			    strerror(errno), errno);
 		    exit(1);
 		}
-		printf("PTY_NAME=%s\n", pty_name);
+		printf("PTY_NAME=%s\n", g_pty_name);
 		// open a slave and keep it open so we avoid EIO from
 		// linux clients
-		slave = open(pty_name, O_RDWR | O_NOCTTY);
+		slave = open(g_pty_name, O_RDWR | O_NOCTTY);
 		(void) slave;
 
 		r708.fd = master;
@@ -928,8 +935,63 @@ int main(int argc, char** argv)
 	    }
 	    VERBOSE(np, "about to start node%s\n", "");
 	    if (pthread_create(&np->thread,&np->attr,f18_emu_start,(void*) np) <0) {
-		perror("pthread_create"); 
+		perror("pthread_create");
 		exit(1);
+	    }
+	}
+    }
+
+    // Set CPU affinity for threads if requested
+    if (g_flags & FLAG_AFFINITY) {
+	int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+	int cpu = 0;
+	cpu_set_t cpuset;
+
+	printf("CPU affinity: %d CPUs available\n", num_cpus);
+
+	// pinning to cpu 0,1,2,3
+	//                                    R
+	//   h 0   1   2   3   4   5  6   7   8
+	// v   --------------------------------------
+	// 7 | 0   1   0   1   0   1  0   1   0
+	// 6 | 2   3   2   3   2   3  2   3   2
+	// 5 | 0   1   0   1   0   1  0   1   0
+	// ...
+	// cpu = (v&1) ? (h%(n/2) : ((n/2)+(h%(n/2)))
+	//   h 0   1   2   3   4   5  6   7   8
+	// v   --------------------------------------
+	// 7 | 0   1   2   3   0   1  2   3   0
+	// 6 | 1   2   3   0   1   2  3   0   1
+	// 5 | 2   3   0   1   2   3  0   1   2
+	// ...
+	// cpu = (((7-v)%n) + h) % n
+
+	// Pin async I/O threads to first CPUs
+	if (has_node_708 && num_cpus >= 2) {
+	    CPU_ZERO(&cpuset);
+	    CPU_SET(cpu % num_cpus, &cpuset);
+	    pthread_setaffinity_np(r708.thread, sizeof(cpuset), &cpuset);
+	    printf("  async_reader -> CPU %d\n", cpu % num_cpus);
+	    cpu++;
+
+	    CPU_ZERO(&cpuset);
+	    CPU_SET(cpu % num_cpus, &cpuset);
+	    pthread_setaffinity_np(w708.thread, sizeof(cpuset), &cpuset);
+	    PRINTF("  async_writer -> CPU %d\n", cpu % num_cpus);
+	    cpu++;
+	}
+
+	// Pin node threads round-robin to remaining CPUs
+	for (i = v-1; i >= 0; i--) {
+	    for (j = 0; j < h; j++) {
+		reg_node_t* np = (reg_node_t*) node[i][j];
+		// int proc = cpu % num_cpus
+		int proc = (((v-1-i) % num_cpus)  + j) % num_cpus;
+		CPU_ZERO(&cpuset);
+		CPU_SET(proc, &cpuset);
+		pthread_setaffinity_np(np->thread, sizeof(cpuset), &cpuset);
+		PRINTF("  node[%d][%d] -> CPU %d\n", i, j, proc);
+		cpu++;
 	    }
 	}
     }

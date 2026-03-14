@@ -72,19 +72,21 @@ static uint18_t select_dirs(node_t* np, uint18_t ioreg)
 }
 
 // update ior status for node "owning" channel 'chan'
-// signals condition if PIN17 changes (for wakeup)
+// Uses atomic update for speed, signals condition only if PIN17 changes
 static void set_ior(chan_t* chan, uint18_t mask)
 {
     reg_node_t* np = chan_to_reg_node(chan);
     uint18_t old_ior;
 
-    pthread_mutex_lock(&chan->lock);
-    old_ior = np->n.ior;
-    np->n.ior |= mask;
-    // Signal if PIN17 changed (for wakeup reads)
-    if ((mask & F18_IO_PIN17) && !(old_ior & F18_IO_PIN17))
-	pthread_cond_broadcast(&chan->cond);
-    pthread_mutex_unlock(&chan->lock);
+    // Atomic fetch-and-or for fast update
+    old_ior = __atomic_fetch_or(&np->n.ior, mask, __ATOMIC_SEQ_CST);
+
+    // Signal condition only if PIN17 changed LOW→HIGH (for wakeup)
+    if ((mask & F18_IO_PIN17) && !(old_ior & F18_IO_PIN17)) {
+        pthread_mutex_lock(&chan->lock);
+        pthread_cond_broadcast(&chan->cond);
+        pthread_mutex_unlock(&chan->lock);
+    }
 }
 
 static void clr_ior(chan_t* chan, uint18_t mask)
@@ -92,13 +94,15 @@ static void clr_ior(chan_t* chan, uint18_t mask)
     reg_node_t* np = chan_to_reg_node(chan);
     uint18_t old_ior;
 
-    pthread_mutex_lock(&chan->lock);
-    old_ior = np->n.ior;
-    np->n.ior &= ~mask;
-    // Signal if PIN17 changed (for wakeup reads)
-    if ((mask & F18_IO_PIN17) && (old_ior & F18_IO_PIN17))
-	pthread_cond_broadcast(&chan->cond);
-    pthread_mutex_unlock(&chan->lock);
+    // Atomic fetch-and-and for fast update
+    old_ior = __atomic_fetch_and(&np->n.ior, ~mask, __ATOMIC_SEQ_CST);
+
+    // Signal condition only if PIN17 changed HIGH→LOW (for wakeup with WD=1)
+    if ((mask & F18_IO_PIN17) && (old_ior & F18_IO_PIN17)) {
+        pthread_mutex_lock(&chan->lock);
+        pthread_cond_broadcast(&chan->cond);
+        pthread_mutex_unlock(&chan->lock);
+    }
 }
 
 //
@@ -121,18 +125,11 @@ static void clr_ior(chan_t* chan, uint18_t mask)
 
 int f18_chan_write(chan_t* chan, uint18_t dir, uint18_t value)
 {
-    int found;
     dir = invert_dir[dir];
 
     pthread_mutex_lock(&chan->lock);
 
     if (chan->rmask & DIR_BIT(dir)) {
-	// Reader is waiting for data from our direction - deliver!
-	//fprintf(stderr, "  chan_write: deliver value=%d to chan, rmask was %x\n", value, chan->rmask);
-	/*
-	printf("chan_write [%03d] data=%d\n",
-	       chan_to_reg_node(chan)->n.id, value);
-	*/
 	chan->data = value;
 	chan->rmask = 0;          // first writer wins, clear all
 	chan->completed = 1;
@@ -140,16 +137,12 @@ int f18_chan_write(chan_t* chan, uint18_t dir, uint18_t value)
 	pthread_mutex_unlock(&chan->lock);
 	return 1;
     }
-    found = chan->rmask;
     pthread_mutex_unlock(&chan->lock);
-    (void) found;
-    // fprintf(stderr, "  chan_write: no reader, rmask=%x\n", found);
     return 0;
 }
 
 int f18_chan_read(chan_t* chan, uint18_t dir, uint18_t* value_ptr)
 {
-    int found;
     dir = invert_dir[dir];
 
     pthread_mutex_lock(&chan->lock);
@@ -157,17 +150,14 @@ int f18_chan_read(chan_t* chan, uint18_t dir, uint18_t* value_ptr)
     if (chan->wmask & DIR_BIT(dir)) {
 	// Writer is waiting to send in our direction - grab data!
 	*value_ptr = chan->data;
-	fprintf(stderr, "[%03x] chan_read: got value=%d from chan, dir=%d, wmask was %x\n", chan_to_reg_node(chan)->n.id, chan->data, dir, chan->wmask);
+	PRINTF("[%03x] chan_read: got value=%d from chan, dir=%d, wmask was %x\n", chan_to_reg_node(chan)->n.id, chan->data, dir, chan->wmask);
 	chan->wmask = 0;          // first reader wins, clear all
 	chan->completed = 1;
 	pthread_cond_signal(&chan->cond);
 	pthread_mutex_unlock(&chan->lock);
 	return 1;
     }
-    found = chan->wmask;
     pthread_mutex_unlock(&chan->lock);
-    (void) found;
-    // fprintf(stderr, "  chan_read: no writer, wmask=%x\n", found);
     return 0;
 }
 
@@ -206,18 +196,16 @@ uint18_t f18_wait_transfer(chan_t* chan, int rw)
     sys_enter_blocked_port();
     pthread_mutex_lock(&chan->lock);
     chan->wait = 1;
-    // fprintf(stderr, "  wait_transfer: waiting rw=%d, rmask=%x wmask=%x\n", rw, chan->rmask, chan->wmask);
+
     while (!chan->completed && !chan->terminate)
 	pthread_cond_wait(&chan->cond, &chan->lock);
     chan->wait = 0;
     if (rw & READ) {
 	chan->rmask = 0;
 	value = chan->data;
-	// fprintf(stderr, "  wait_transfer: woke READ, got value=%d\n", value);
     }
     if (rw & WRITE) {
 	chan->wmask = 0;
-	// fprintf(stderr, "  wait_transfer: woke WRITE done\n");
     }
     pthread_mutex_unlock(&chan->lock);
     sys_leave_blocked_port();
@@ -232,7 +220,8 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     int dir;
 
     if ((ioreg < IOREG_START) || (ioreg > IOREG_END)) {
-	ERROR(np, "io error when writing ioreg=%x, not mapped\n", ioreg);
+	ERRORF("[%03d]: io error when writing ioreg=%x, not mapped\n",
+	       np->id, ioreg);
 	return;
     }
 
@@ -260,7 +249,8 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     dirs = select_dirs(np, ioreg);
     
     if (dirs == 0) {
-	ERROR(np, "io error when writing ioreg=%x, no directions\n", ioreg);
+	ERRORF("[%03d]: io error when writing ioreg=%x, no directions\n",
+	       np->id, ioreg);
 	return;
     }
 
@@ -296,16 +286,22 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
 }
 
 // check neighbours and pins and update io read mask
-void update_io_status(reg_node_t* dp)
+uint18_t read_io(reg_node_t* dp)
 {
-    uint18_t status = 0;
-    uint18_t mask   = 0;    
+    uint18_t status;
+    uint18_t mask;
+    uint32_t old_val, new_val;    
     uint18_t dirs;
     int dir;
     chan_t* rp;
 
     dirs = dp->dmask; // select_dirs((node_t*)dp, IOREG_RDLU);
 
+    // Fast path: no port neighbors, just GPIO - skip mutex locks entirely
+    if (dirs == 0)
+	return __atomic_load_n(&dp->n.ior, __ATOMIC_SEQ_CST);
+
+    status = mask = 0;
     for (dir = 0; dir < 4; dir++) {
 	uint18_t idir;
 	if (!(dirs & DIR_BIT(dir))) continue;
@@ -323,9 +319,16 @@ void update_io_status(reg_node_t* dp)
 	pthread_mutex_unlock(&rp->lock);
     }
 
-    pthread_mutex_lock(&dp->chan.lock);    
-    dp->n.ior = (dp->n.ior & ~mask) | (status & mask);
-    pthread_mutex_unlock(&dp->chan.lock);    
+    // Atomic read-modify-write using compare-and-swap loop
+    if (mask) {
+        do {
+            old_val = __atomic_load_n(&dp->n.ior, __ATOMIC_SEQ_CST);
+            new_val = (old_val & ~mask) | (status & mask);
+        } while (!__atomic_compare_exchange_n(&dp->n.ior, &old_val, new_val,
+                                              0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+	return new_val;
+    }
+    return __atomic_load_n(&dp->n.ior, __ATOMIC_SEQ_CST);
 }
 
 uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
@@ -338,14 +341,13 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     int dir;
 
     if ((ioreg < IOREG_START) || (ioreg > IOREG_END)) {
-	ERROR(np,"io error when reading ioreg=%x, not mapped\n",ioreg);
+	ERRORF("[%03d]: io error when reading ioreg=%x, not mapped\n",
+	       np->id, ioreg);
 	return 0;
     }
 
-    if (ioreg == IOREG_IO) {
-	update_io_status(dp);
-	return dp->n.ior;
-    }
+    if (ioreg == IOREG_IO)
+	return read_io(dp);
 
     dirs = select_dirs(np, ioreg);
     iodir  = np->io_addr ?
@@ -359,15 +361,14 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	    (dirs & DIR_BIT(LEFT)  ? 'L' : '_'),
 	    (dirs & DIR_BIT(UP)    ? 'U' : '_'));
     if (dirs == 0) {
-	ERROR(np,"io error when reading ioreg=%x, no directions\n", ioreg);
+	ERRORF("[%03d]: io error when reading ioreg=%x, no directions\n",
+	      np->id, ioreg);
 	return 0;
     }
 
     // IOREG_DATA (x141) / IOREG_LDATA (x171): no handshake, return IOR immediately
-    if (ioreg == IOREG_DATA || ioreg == IOREG_LDATA) {
-	update_io_status(dp);
-	return dp->n.ior;
-    }
+    if (ioreg == IOREG_DATA || ioreg == IOREG_LDATA)
+	return read_io(dp);
 
     // GPIO wakeup read: suspend until PIN17 matches WD state
     // WD=0 (reset): wait until PIN17 is HIGH
@@ -377,19 +378,19 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     if (iodir && (dirs & iodir)) {
 	if (np->flags & FLAG_GPIO_POLL) {
 	    // Poll mode: return current IOR immediately
-	    update_io_status(dp);
-	    return np->ior;
+	    return read_io(dp);
 	}
 	int wd_state = (np->iow & F18_IO_WD) ? 1 : 0;  // WD bit as written
 	int want_high = !wd_state;  // WD=0 means wait for HIGH
 
 	pthread_mutex_lock(&dp->chan.lock);
 	while (!(np->flags & FLAG_TERMINATE)) {
-	    int pin17_high = (np->ior & F18_IO_PIN17) ? 1 : 0;
+	    uint32_t ior_val = __atomic_load_n(&np->ior, __ATOMIC_SEQ_CST);
+	    int pin17_high = (ior_val & F18_IO_PIN17) ? 1 : 0;
 	    if (pin17_high == want_high) {
 		// PIN17 matches desired state - wakeup!
 		pthread_mutex_unlock(&dp->chan.lock);
-		return np->ior;  // Return IOR (caller should drop this)
+		return ior_val;  // Return IOR (caller should drop this)
 	    }
 	    // Wait for PIN17 to change
 	    pthread_cond_wait(&dp->chan.cond, &dp->chan.lock);
@@ -557,12 +558,12 @@ void async_reader(async_reader_t* ap)
 		count = 30;
 	    }
 	    else if (n == 0) {
-		fprintf(stderr, "async_reader: read 0 bytes\n");
+		PRINTF("async_reader: read 0 bytes\n");
 		goto again;
 	    }
 	    else if (n < 0) {
-		fprintf(stderr, "async_reader: read error %d (%s)\n",
-			errno, strerror(errno));
+		ERRORF("async_reader: read error %d (%s)\n",
+		       errno, strerror(errno));
 		return;
 	    }
 	}
@@ -603,8 +604,7 @@ void async_writer(async_writer_t* ap)
 	    }
 	    // FIXME: may implement multiplt pins (configire in async_writer)
 	    // emulate bit sending 11 = 0, 10 => 1
-	    fprintf(stderr, "async_writer: got value=%d, count=%d\n",
-		    value, count);
+	    PRINTF("async_writer: got value=%d, count=%d\n", value, count);
 	    if (value == 3) {
 		bits = (bits << 1) | 0;
 		count++;
@@ -614,7 +614,7 @@ void async_writer(async_writer_t* ap)
 		count++;
 	    }
 	    else {
-		fprintf(stderr, "async_writer: unexpected value %d\n", value);
+		PRINTF("async_writer: unexpected value %d\n", value);
 	    }
 	}
 	if (!ap->chan.terminate) {
@@ -626,8 +626,8 @@ void async_writer(async_writer_t* ap)
 		bits >>= 1;
 	    }
 	    if (ap->fd >= 0) {
-		fprintf(stderr, "async_writer: output byte %02x '%c'\n",
-			b, (b >= 32 && b < 127) ? b : '?');
+		PRINTF("async_writer: output byte %02x '%c'\n",
+		       b, (b >= 32 && b < 127) ? b : '?');
 		// fix sending
 		// write(ap->fd, &b, 1);
 	    }

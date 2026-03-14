@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <unistd.h>
 
 #include "f18_types.h"
@@ -175,15 +176,17 @@
 #define FLAG_DUMP_RS      0x00040
 #define FLAG_DUMP_DS      0x00080
 #define FLAG_DUMP_BITS    0x000F8
-#define FLAG_RD_BIN_RIGHT 0x00800
-#define FLAG_RD_BIN_DOWN  0x00400
-#define FLAG_RD_BIN_LEFT  0x00200
-#define FLAG_RD_BIN_UP    0x00100
-#define FLAG_WR_BIN_RIGHT 0x08000
-#define FLAG_WR_BIN_LEFT  0x04000
-#define FLAG_WR_BIN_DOWN  0x02000
-#define FLAG_WR_BIN_UP    0x01000
+#define FLAG_SILENT       0x00100
+//#define FLAG_RD_BIN_RIGHT 0x00800
+//#define FLAG_RD_BIN_DOWN  0x00400
+//#define FLAG_RD_BIN_LEFT  0x00200
+//#define FLAG_RD_BIN_UP    0x00100
+//#define FLAG_WR_BIN_RIGHT 0x08000
+//#define FLAG_WR_BIN_LEFT  0x04000
+//#define FLAG_WR_BIN_DOWN  0x02000
+//#define FLAG_WR_BIN_UP    0x01000
 #define FLAG_GPIO_POLL    0x20000   // GPIO reads return immediately (poll mode)
+#define FLAG_AFFINITY     0x40000   // Enable CPU affinity for threads
 
 #define MAKE_ID(i,j)     ((i)*100+(j))
 #define ID_TO_ROW(id)    ((id)/100)
@@ -297,7 +300,7 @@ typedef struct _node_t {
     f18_rom_type_t rom_type;
     const uint18_t* rom;
     f18_symbol_table_t* symtab; // loaded symbols, if present
-    uint18_t       ior;     // io status register read
+    _Atomic uint32_t ior __attribute__((aligned(64)));  // io status register read (atomic, cache-aligned)
     uint18_t       iow;     // io status register write
     uint18_t       id;      // id 000 - 717 (decimal)
     useconds_t delay;       // delay between instructions
@@ -318,31 +321,31 @@ typedef struct _node_t {
     char buf[32];
 } node_t;
 
+extern uint18_t g_flags;
 
 #ifdef DEBUG
-#define VERBOSE(np,fmt,...) do {			\
-	if (((node_t*)(np))->flags & FLAG_VERBOSE)			\
+#define VERBOSE(np,fmt,...) do {					\
+	if (!(g_flags & FLAG_SILENT) && (((node_t*)(np))->flags & FLAG_VERBOSE)) \
 	    fprintf(stderr,"[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
 #define TRACE(np,fmt, ...) do {				\
-	if (((node_t*)(np))->flags & FLAG_TRACE)			\
+	if (!(g_flags & FLAG_SILENT) && (((node_t*)(np))->flags & FLAG_TRACE)) \
 	    fprintf(stderr, "[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
-#define DELAY(np) do {					\
-	if (((node_t*)(np))->delay)			\
-	    usleep(((node_t*)(np))->delay);		\
+#define PRINTF(fmt...) do {			\
+	if (!(g_flags & FLAG_SILENT))		\
+	    fprintf(stderr,fmt);	\
     } while(0)
 #else
 #define VERBOSE(np,fmt, ...)
 #define TRACE(np,fmt, ...)
-#define DELAY(np)
+#define PRINTF(fmt, ...)
 #endif
 
-#define ERROR(np,fmt,...) do {			\
-	if (((node_t*)(np))->flags & FLAG_VERBOSE)			\
-	    fprintf(stderr,"[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
+#define ERRORF(fmt,...) do {						\
+	if (!(g_flags & FLAG_SILENT))					\
+	    fprintf(stderr,fmt,__VA_ARGS__);				\
     } while(0)
-
 
 extern void f18_emu(node_t* p);
 extern char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,

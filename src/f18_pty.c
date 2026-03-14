@@ -193,6 +193,10 @@ int open_pty(char* name, size_t max_namelen)
 
     if (set_blocking(fd, 0) < 0)
 	goto error;
+    // flush input / output 
+    if (tcflush(fd, TCIOFLUSH) < 0) {
+	DEBUGF("tcflush failed : %s", strerror(errno));
+    }
     return fd;
 #endif
 	errno = ENOTSUP;
