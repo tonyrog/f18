@@ -12,7 +12,7 @@ space = $(empty) $(empty)
 MODULES=$(subst $(space),$(comma),$(ERL_MODULES))
 VERSION=$(shell git describe --always --tags)
 
-OBJS = f18_emu.o f18_channel.o f18_exec.o f18_scan.o f18_rom.o f18_dis.o f18_config.o f18_pty.o f18_debug.o f18_tui.o f18_strings.o f18_sym.o f18_byte_queue.o
+OBJS = f18_emu.o f18_channel.o f18_exec.o f18_scan.o f18_rom.o f18_dis.o f18_config.o f18_pty.o f18_debug.o f18_tui.o f18_strings.o f18_sym.o f18_byte_queue.o f18_socket.o f18_serdes.o f18_async.o
 
 CFLAGS = -MMD -MF .$<.d  -g -DDEBUG -Wall
 LDFLAGS = -g -lpthread -lncursesw

@@ -22,6 +22,8 @@
 #include "f18.h"
 #include "f18_scan.h"
 #include "f18_node.h"
+#include "f18_async.h"
+#include "f18_serdes.h"
 #include "f18_debug.h"
 #include "f18_tui.h"
 
@@ -54,6 +56,10 @@ uint18_t g_flags = 0;
 uint32_t g_v = 1, g_h = 1;  // Non-static for TUI access
 char g_pty_name[256] = "";  // PTY name for TUI display
 static char* g_step_spec = NULL;  // -I step node specification
+
+// SERDES configuration: mode for each SERDES node (0=none, 1=server, 2=client)
+static int g_serdes_701_mode = 0;
+static int g_serdes_001_mode = 0;
 
 // System thread state tracking (atomics for counters, mutex/cond for wait)
 static _Atomic int num_active = 0;
@@ -115,9 +121,6 @@ static SIGRETTYPE suspend(int);
 static SIGRETTYPE (*orig_ctl_c)(int);
 
 node_t* node[8][18];
-
-async_reader_t r708;
-async_writer_t w708;
 
 SIGRETTYPE (*sys_sigset(int sig, SIGRETTYPE (*func)(int)))(int)
 {
@@ -250,6 +253,8 @@ void usage(char* prog)
 	    "    -P               GPIO poll mode (no wakeup wait)\n"
 	    "    -A               Enable CPU affinity (pin threads to cores)\n"
 	    "    -L VxH           Set processor mesh layout (max 8x18)\n"
+	    "    -S <node>:<mode> SERDES mode for node 701 or 001\n"
+	    "                     mode: server or client\n"
 	);
     exit(1);
 }
@@ -538,7 +543,7 @@ int main(int argc, char** argv)
 
     check_clock();
     
-    while((c = getopt(argc, argv, "ivqtnPAl:b:d:I:L:D:f:G")) != -1) {
+    while((c = getopt(argc, argv, "ivqtnPAl:b:d:I:L:D:f:GS:")) != -1) {
 	switch(c) {
 	case 'i': interactive = 1; break;
 	case 'n': noexec = 1; break;
@@ -554,6 +559,34 @@ int main(int argc, char** argv)
 	    g_flags |= FLAG_DEBUG_ENABLE;
 	    g_flags |= FLAG_SILENT;
 	    break;
+	case 'S': {
+	    // Parse SERDES option: <node>:<mode>
+	    // e.g., "701:server" or "001:client"
+	    int snode;
+	    char smode[16];
+	    if (sscanf(optarg, "%d:%15s", &snode, smode) != 2) {
+		fprintf(stderr, "Invalid SERDES option: %s\n", optarg);
+		usage(basename(argv[0]));
+	    }
+	    int mode_val = 0;
+	    if (strcmp(smode, "server") == 0)
+		mode_val = 1;
+	    else if (strcmp(smode, "client") == 0)
+		mode_val = 2;
+	    else {
+		fprintf(stderr, "Invalid SERDES mode: %s (use 'server' or 'client')\n", smode);
+		usage(basename(argv[0]));
+	    }
+	    if (snode == 701)
+		g_serdes_701_mode = mode_val;
+	    else if (snode == 1)
+		g_serdes_001_mode = mode_val;
+	    else {
+		fprintf(stderr, "Invalid SERDES node: %d (use 701 or 001)\n", snode);
+		usage(basename(argv[0]));
+	    }
+	    break;
+	}
 	case 'd': {
 	    char* endptr = NULL;
 	    if ((delay = strtol(optarg, &endptr,0)) == 0) {
@@ -704,75 +737,119 @@ int main(int argc, char** argv)
     np_mem = (uint8_t*) node_mem;
     for (i = 0; i < v; i++) {
 	for (j = 0; j < h; j++) {
-	    reg_node_t* np = (reg_node_t*) np_mem;
+	    reg_node_t* np;
 	    f18_rom_type_t rt;
+	    int node_id = MAKE_ID(i,j);
+	    int is_serdes = 0;
 
-	    memset(np, 0, sizeof(reg_node_t));
-	    
-	    node[i][j]= (node_t*) np;
-	    // printf("node[%d][%02d] = %p\n", i, j, np);
+	    // Check if this is a SERDES node - allocate larger structure
+	    if ((node_id == 701 && g_serdes_701_mode > 0) ||
+		(node_id == 1 && g_serdes_001_mode > 0)) {
+		serdes_node_t* sp = (serdes_node_t*) malloc(sizeof(serdes_node_t));
+		memset(sp, 0, sizeof(serdes_node_t));
+		np = &sp->rn;
+		is_serdes = 1;
+	    } else {
+		np = (reg_node_t*) np_mem;
+		memset(np, 0, sizeof(reg_node_t));
+		np_mem += (PAGE(NODE_SIZE));
+	    }
+
+	    node[i][j] = (node_t*) np;
 	    rt = RomTypeMap[i][j];
 	    np->n.rom_type = rt;
 	    np->n.rom = RomMap[rt].addr;
-	    np->n.id = MAKE_ID(i,j);
-	    if ((np->n.id == 708) && (rt == async_boot)) {
-		int master, slave;
+	    np->n.id = node_id;
 
-		memset(&r708, 0, sizeof(r708));
-		memset(&w708, 0, sizeof(w708));
+	    // Special node initialization based on node_id
+	    switch (node_id) {
+	    case 708:
+		if (rt == async_boot) {
+		    int master, slave;
 
-		f18_chan_init(&r708.chan);
-		f18_chan_init(&w708.chan);
-		async_reader_init(&r708);
+		    memset(&r708, 0, sizeof(r708));
+		    memset(&w708, 0, sizeof(w708));
 
-		if ((master = open_pty(g_pty_name, sizeof(g_pty_name))) < 0) {
-		    fprintf(stderr, "unable to open a pty error=%s (%d)\n",
-			    strerror(errno), errno);
-		    exit(1);
+		    f18_chan_init(&r708.chan);
+		    f18_chan_init(&w708.chan);
+		    async_reader_init(&r708);
+
+		    if ((master = open_pty(g_pty_name, sizeof(g_pty_name))) < 0) {
+			fprintf(stderr, "unable to open a pty error=%s (%d)\n",
+				strerror(errno), errno);
+			exit(1);
+		    }
+		    PRINTF("PTY_NAME=%s\n", g_pty_name);
+		    slave = open(g_pty_name, O_RDWR | O_NOCTTY);
+		    (void) slave;
+
+		    r708.fd = master;
+		    r708.baud = baud;
+		    w708.fd = STDOUT_FILENO;
+		    w708.baud = baud;
 		}
-		PRINTF("PTY_NAME=%s\n", g_pty_name);
-		// open a slave and keep it open so we avoid EIO from
-		// linux clients
-		slave = open(g_pty_name, O_RDWR | O_NOCTTY);
-		(void) slave;
+		break;
 
-		r708.fd = master;
-		r708.baud = baud;
-		w708.fd = STDOUT_FILENO;  // Write to stdout for testing
-		w708.baud = baud;		
+	    case 701:
+		if (g_serdes_701_mode > 0) {
+		    serdes_node_t* sp = (serdes_node_t*) np;
+		    serdes_node_init(sp, node_id);
+		    if (serdes_setup(sp, g_serdes_701_mode == 1 ? "server" : "client") < 0) {
+			fprintf(stderr, "Failed to setup SERDES node 701\n");
+			exit(1);
+		    }
+		    printf("SERDES 701 initialized as %s\n",
+			   g_serdes_701_mode == 1 ? "server" : "client");
+		}
+		break;
+
+	    case 1:  // node 001
+		if (g_serdes_001_mode > 0) {
+		    serdes_node_t* sp = (serdes_node_t*) np;
+		    serdes_node_init(sp, node_id);
+		    if (serdes_setup(sp, g_serdes_001_mode == 1 ? "server" : "client") < 0) {
+			fprintf(stderr, "Failed to setup SERDES node 001\n");
+			exit(1);
+		    }
+		    printf("SERDES 001 initialized as %s\n",
+			   g_serdes_001_mode == 1 ? "server" : "client");
+		}
+		break;
 	    }
 
 	    np->dmask = 0;
 	    np->imask = 0;
-	    
+
 	    f18_chan_init(&np->chan);
 
 	    np->neighbour[0] = NULL;
 	    np->neighbour[1] = NULL;
 	    np->neighbour[2] = NULL;
 	    np->neighbour[3] = NULL;
-	    np->neighbour[4] = NULL;	    
+	    np->neighbour[4] = NULL;
 
 	    np->n.ior    = IMASK;  // default read value
 	    np->n.iow    = 0;      // write cache
 	    if (id == 999)
 		np->n.flags  = g_flags;
 	    else if (np->n.id == id)
-		np->n.flags  = g_flags; // specific for node?
+		np->n.flags  = g_flags;
 
-	    np->n.delay  = delay;    // specific for node?
+	    np->n.delay  = delay;
 
 	    np->n.reg.p = ConfigMap[i][j].reset;
 	    np->n.io_addr = ConfigMap[i][j].io_addr;
 	    np->dmask = dirbits(i,j,ConfigMap[i][j].comm);
 	    np->imask = (ConfigMap[i][j].io_addr ?
 			 dirbits(i,j,ConfigMap[i][j].io_addr) : 0);
-	    
-	    np->n.reg.b = IOREG_IO;
-	    np->n.read_ioreg  = f18_read_ioreg;
-	    np->n.write_ioreg = f18_write_ioreg;
 
-	    np_mem += (PAGE(NODE_SIZE));
+	    np->n.reg.b = IOREG_IO;
+
+	    // Set read/write handlers (SERDES nodes override in serdes_node_init)
+	    if (!is_serdes) {
+		np->n.read_ioreg  = f18_read_ioreg;
+		np->n.write_ioreg = f18_write_ioreg;
+	    }
 	}
     }
 
