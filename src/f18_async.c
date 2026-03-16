@@ -30,7 +30,6 @@ void async_reader_init(async_reader_t* ap)
     byte_queue_init(&ap->bq);
     ap->sample_count = 1;
     ap->bit_count = 0;
-    ap->first_bit_received = 0;
 }
 
 // read_ioreg for node 708 - synchronous bit delivery

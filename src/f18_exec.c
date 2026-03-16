@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include <assert.h>
 
 #include "f18.h"
 #include "f18_scan.h"
@@ -722,6 +723,7 @@ int main(int argc, char** argv)
 	fprintf(stderr, "node size: %ld bytes\n", PAGE(NODE_SIZE));
 	fprintf(stderr, "sizeof(node_t): %lu\n", sizeof(node_t));
 	fprintf(stderr, "sizeof(reg_node_t): %lu\n", sizeof(reg_node_t));
+	fprintf(stderr, "sizeof(serdes_node_t): %lu\n", sizeof(serdes_node_t));	
 	fprintf(stderr, "layout: %d x %d\n", v, h);
     }
 
@@ -740,82 +742,17 @@ int main(int argc, char** argv)
 	    reg_node_t* np;
 	    f18_rom_type_t rt;
 	    int node_id = MAKE_ID(i,j);
-	    int is_serdes = 0;
 
-	    // Check if this is a SERDES node - allocate larger structure
-	    if ((node_id == 701 && g_serdes_701_mode > 0) ||
-		(node_id == 1 && g_serdes_001_mode > 0)) {
-		serdes_node_t* sp = (serdes_node_t*) malloc(sizeof(serdes_node_t));
-		memset(sp, 0, sizeof(serdes_node_t));
-		np = &sp->rn;
-		is_serdes = 1;
-	    } else {
-		np = (reg_node_t*) np_mem;
-		memset(np, 0, sizeof(reg_node_t));
-		np_mem += (PAGE(NODE_SIZE));
-	    }
+	    // each thread structure is allocated in one page
+	    memset(np_mem, 0, PAGE(NODE_SIZE));
 
+	    np = (reg_node_t*) np_mem;
+	    np_mem += (PAGE(NODE_SIZE));
 	    node[i][j] = (node_t*) np;
 	    rt = RomTypeMap[i][j];
 	    np->n.rom_type = rt;
 	    np->n.rom = RomMap[rt].addr;
 	    np->n.id = node_id;
-
-	    // Special node initialization based on node_id
-	    switch (node_id) {
-	    case 708:
-		if (rt == async_boot) {
-		    int master, slave;
-
-		    memset(&r708, 0, sizeof(r708));
-		    memset(&w708, 0, sizeof(w708));
-
-		    f18_chan_init(&r708.chan);
-		    f18_chan_init(&w708.chan);
-		    async_reader_init(&r708);
-
-		    if ((master = open_pty(g_pty_name, sizeof(g_pty_name))) < 0) {
-			fprintf(stderr, "unable to open a pty error=%s (%d)\n",
-				strerror(errno), errno);
-			exit(1);
-		    }
-		    PRINTF("PTY_NAME=%s\n", g_pty_name);
-		    slave = open(g_pty_name, O_RDWR | O_NOCTTY);
-		    (void) slave;
-
-		    r708.fd = master;
-		    r708.baud = baud;
-		    w708.fd = STDOUT_FILENO;
-		    w708.baud = baud;
-		}
-		break;
-
-	    case 701:
-		if (g_serdes_701_mode > 0) {
-		    serdes_node_t* sp = (serdes_node_t*) np;
-		    serdes_node_init(sp, node_id);
-		    if (serdes_setup(sp, g_serdes_701_mode == 1 ? "server" : "client") < 0) {
-			fprintf(stderr, "Failed to setup SERDES node 701\n");
-			exit(1);
-		    }
-		    printf("SERDES 701 initialized as %s\n",
-			   g_serdes_701_mode == 1 ? "server" : "client");
-		}
-		break;
-
-	    case 1:  // node 001
-		if (g_serdes_001_mode > 0) {
-		    serdes_node_t* sp = (serdes_node_t*) np;
-		    serdes_node_init(sp, node_id);
-		    if (serdes_setup(sp, g_serdes_001_mode == 1 ? "server" : "client") < 0) {
-			fprintf(stderr, "Failed to setup SERDES node 001\n");
-			exit(1);
-		    }
-		    printf("SERDES 001 initialized as %s\n",
-			   g_serdes_001_mode == 1 ? "server" : "client");
-		}
-		break;
-	    }
 
 	    np->dmask = 0;
 	    np->imask = 0;
@@ -830,12 +767,6 @@ int main(int argc, char** argv)
 
 	    np->n.ior    = IMASK;  // default read value
 	    np->n.iow    = 0;      // write cache
-	    if (id == 999)
-		np->n.flags  = g_flags;
-	    else if (np->n.id == id)
-		np->n.flags  = g_flags;
-
-	    np->n.delay  = delay;
 
 	    np->n.reg.p = ConfigMap[i][j].reset;
 	    np->n.io_addr = ConfigMap[i][j].io_addr;
@@ -843,17 +774,77 @@ int main(int argc, char** argv)
 	    np->imask = (ConfigMap[i][j].io_addr ?
 			 dirbits(i,j,ConfigMap[i][j].io_addr) : 0);
 
+	    // fixme: better config per process
+	    if (id == 999)
+		np->n.flags  = g_flags;
+	    else if (np->n.id == id)
+		np->n.flags  = g_flags;
+	    np->n.delay  = delay;
 	    np->n.reg.b = IOREG_IO;
+	    np->n.read_ioreg  = f18_read_ioreg;
+	    np->n.write_ioreg = f18_write_ioreg;
 
-	    // Set read/write handlers (SERDES nodes override in serdes_node_init)
-	    if (!is_serdes) {
-		np->n.read_ioreg  = f18_read_ioreg;
-		np->n.write_ioreg = f18_write_ioreg;
+	    // Special node initialization based on node_id
+	    switch (rt) {
+	    case async_boot: {
+		int master, slave;
+		
+		assert(node_id == 708);
+		
+		memset(&r708, 0, sizeof(r708));
+		memset(&w708, 0, sizeof(w708));
+
+		f18_chan_init(&r708.chan);
+		f18_chan_init(&w708.chan);
+		async_reader_init(&r708);
+
+		if ((master = open_pty(g_pty_name, sizeof(g_pty_name))) < 0) {
+		    fprintf(stderr, "unable to open a pty error=%s (%d)\n",
+			    strerror(errno), errno);
+		    exit(1);
+		}
+		PRINTF("PTY_NAME=%s\n", g_pty_name);
+		slave = open(g_pty_name, O_RDWR | O_NOCTTY);
+		(void) slave;
+
+		r708.fd = master;
+		r708.baud = baud;
+		w708.fd = STDOUT_FILENO;
+		w708.baud = baud;
+		np->n.read_ioreg = read_ioreg_708; // sync buffer read
+		break;		
+	    }
+	    case serdes_boot: {
+		serdes_node_t* sp = (serdes_node_t*) np;
+		char*mode = NULL;
+		
+		assert(node_id == 001 || node_id == 701);
+		serdes_node_init(sp, node_id);
+		if ((node_id == 701) && (g_serdes_701_mode > 0)) {
+		    mode = g_serdes_701_mode == 1 ? "server" : "client";
+		    if (serdes_setup(sp,mode) < 0) {		    
+			fprintf(stderr, "Failed to setup SERDES node 701\n");
+			exit(1);
+		    }
+		}
+		else if ((node_id == 001) && (g_serdes_001_mode > 0)) {
+		    mode = g_serdes_001_mode == 1 ? "server" : "client";
+		    if (serdes_setup(sp,mode) < 0) {
+			fprintf(stderr, "Failed to setup SERDES node 001\n");
+			exit(1);
+		    }
+		}
+		if (mode != NULL) 
+		    PRINTF("SERDES %03d initialized as %s\n",  node_id, mode);
+		break;
+	    }
+	    default:
+		break;
 	    }
 	}
     }
 
-    // lets load node if -f was given
+    // load nodes if -f was given
     if (file_fd >= 0) {
 	uint18_t nid = 0xfff;
 	uint18_t addr = 0;
@@ -925,7 +916,6 @@ int main(int argc, char** argv)
 		    np->ioc = &w708.chan;              // io control channel
 		    w708.n.id = 908;
 		    w708.in = &np->chan;              // write from 708
-		    np->n.read_ioreg = read_ioreg_708; // sync buffer read
 		}
 	    }
 	    if (i > 0)
@@ -991,31 +981,30 @@ int main(int argc, char** argv)
     // Set num_active before creating threads to avoid race where main
     // thread checks the termination condition before threads have started
     // Check if node 708 exists (row 7, col 8) before including async threads
-    int has_node_708 = (v > 7 && h > 8 && node[7][8] != NULL);
-    num_active = v * h + (has_node_708 ? 2 : 0);
-
-    // Start async I/O threads only if node 708 exists
-    if (has_node_708) {
-	pthread_attr_init(&r708.attr);
-	pthread_attr_setstacksize(&r708.attr, PAGE(STACK_SIZE));
-	if (pthread_create(&r708.thread,&r708.attr,async_reader_start,
-			   (void*) &r708) <0) {
-	    perror("pthread_create");
-	    exit(1);
-	}
-
-	pthread_attr_init(&w708.attr);
-	pthread_attr_setstacksize(&w708.attr, PAGE(STACK_SIZE));
-	if (pthread_create(&w708.thread,&w708.attr,async_writer_start,
-			   (void*)&w708) <0) {
-	    perror("pthread_create");
-	    exit(1);
-	}
-    }
+    num_active = v * h;
 
     for (i=0; i < v; i++) {
 	for (j = 0; j < h; j++) {
 	    reg_node_t* np = (reg_node_t*) node[i][j];
+
+	    if (np->n.id == 708) {
+		pthread_attr_init(&r708.attr);
+		pthread_attr_setstacksize(&r708.attr, PAGE(STACK_SIZE));
+		if (pthread_create(&r708.thread,&r708.attr,async_reader_start,
+				   (void*) &r708) <0) {
+		    perror("pthread_create");
+		    exit(1);
+		}
+
+		pthread_attr_init(&w708.attr);
+		pthread_attr_setstacksize(&w708.attr, PAGE(STACK_SIZE));
+		if (pthread_create(&w708.thread,&w708.attr,async_writer_start,
+				   (void*)&w708) <0) {
+		    perror("pthread_create");
+		    exit(1);
+		}
+		num_active += 2;
+	    }
 
 	    pthread_attr_init(&np->attr);
 	    pthread_attr_setstacksize(&np->attr, PAGE(STACK_SIZE));
@@ -1058,7 +1047,8 @@ int main(int argc, char** argv)
 	// cpu = (((7-v)%n) + h) % n
 
 	// Pin async I/O threads to first CPUs
-	if (has_node_708 && num_cpus >= 2) {
+	    
+	if ((node[7][8] != NULL) && (num_cpus >= 2)) {
 	    CPU_ZERO(&cpuset);
 	    CPU_SET(cpu % num_cpus, &cpuset);
 	    pthread_setaffinity_np(r708.thread, sizeof(cpuset), &cpuset);

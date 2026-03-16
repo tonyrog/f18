@@ -24,7 +24,6 @@ typedef struct _async_reader_t {
     int baud;
     byte_queue_t bq;
     volatile int sample_count;        // @b reads since last bit change
-    volatile int first_bit_received;  // Block until first start bit
     volatile int bit_count;           // bits received in current word (0-29)
 } async_reader_t;
 
