@@ -4,6 +4,9 @@
 // reg_node serdes_node analog_node
 #include "f18.h"
 #include "f18_debug.h"
+#include "f18_byte_queue.h"
+#include <pthread.h>
+
 
 // Randvous state 
 typedef struct {
@@ -37,6 +40,7 @@ typedef struct {
 #define chan_to_reg_node(cp) \
     ((reg_node_t*) (((uint8_t*)(cp))-sizeof(node_t)))
 
+
 // async nodes it is a io  RX/TX
 // channel is normally connect to node like 708 aync_boot
 //
@@ -48,9 +52,16 @@ typedef struct _async_reader_t {
     pthread_attr_t attr;
     int fd;
     int baud;
+    byte_queue_t bq;
+    volatile int sample_count;  // @b reads since last bit change
+    volatile int first_bit_received;  // Block until first start bit
+    volatile int bit_count;     // bits received in current word (0-29)
 } async_reader_t;
 
 extern void async_reader(async_reader_t* ap);
+extern void async_reader_init(async_reader_t* ap);
+extern uint18_t read_ioreg_708(node_t* np, uint18_t ioreg);
+extern uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg);
 
 typedef struct _async_writer_t {
     node_t n;       // currently a dummy node    

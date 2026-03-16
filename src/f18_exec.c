@@ -46,6 +46,7 @@ extern void init_node(int i, int j);
 #define STACK_SIZE  (2*PAGE_SIZE+PTHREAD_STACK_MIN)
 
 static int tty_fd = -1;
+FILE* logout = NULL;
 static struct termios tty_smode;
 static struct termios tty_rmode;
 static size_t  g_page_size = 0;
@@ -235,7 +236,7 @@ void usage(char* prog)
 	    "    -t               Enable trace     (if debug compiled)\n"
 	    "    -i               Interactive\n"
 	    "    -n               No execute, just load, dump etx\n"
-	    "    -I               id of node to dump, 888 for map\n"    
+	    "    -I               id of node to dump, 888 for map\n"
 	    "    -D <comma-list>  Dump data and registers\n"
 	    "       reg           registers\n"
 	    "       ram           RAM\n"
@@ -243,11 +244,12 @@ void usage(char* prog)
             "       rs            return stack\n"
 	    "       ds            data stack\n"
 	    "    -d <delay>       Set delay between instructions (in usecs)\n"
-	    "    -l VxH           Set processor mesh layout (max 8x18)\n"
 	    "    -f load-file     Load node RAM from file (testing)\n"
+	    "    -l log-file      Direct all log output to this file\n"
 	    "    -b <baud>        Set async boot baud rate\n"
 	    "    -P               GPIO poll mode (no wakeup wait)\n"
 	    "    -A               Enable CPU affinity (pin threads to cores)\n"
+	    "    -L VxH           Set processor mesh layout (max 8x18)\n"
 	);
     exit(1);
 }
@@ -512,7 +514,6 @@ void check_clock()
     }
 }
 
-
 int main(int argc, char** argv)
 {
     int fd;
@@ -526,6 +527,7 @@ int main(int argc, char** argv)
     size_t alloc_size;
     int interactive = 0;
     char* filename = NULL;
+    char* log_filename = NULL;
     int file_fd = -1;
     uint18_t id = 999;
     int noexec = 0;
@@ -536,17 +538,18 @@ int main(int argc, char** argv)
 
     check_clock();
     
-    while((c = getopt(argc, argv, "ivqtnPAl:b:d:I:D:f:G")) != -1) {
+    while((c = getopt(argc, argv, "ivqtnPAl:b:d:I:L:D:f:G")) != -1) {
 	switch(c) {
 	case 'i': interactive = 1; break;
 	case 'n': noexec = 1; break;
 	case 'f': filename = optarg; break;
+	case 'l': log_filename = optarg; break;	    
 	case 'v': g_flags |= FLAG_VERBOSE; break;
 	case 'q': g_flags |= FLAG_SILENT; break;
 	case 't': g_flags |= FLAG_TRACE; break;
 	case 'P': g_flags |= FLAG_GPIO_POLL; break;  // GPIO poll mode (no wakeup wait)
 	case 'A': g_flags |= FLAG_AFFINITY; break;   // CPU affinity for threads
-	case 'l': opt_layout = optarg; break;
+	case 'L': opt_layout = optarg; break;
 	case 'G':
 	    g_flags |= FLAG_DEBUG_ENABLE;
 	    g_flags |= FLAG_SILENT;
@@ -648,6 +651,15 @@ int main(int argc, char** argv)
 	}
     }
 
+    logout = stderr;
+    if (log_filename != NULL) {
+	if ((logout = fopen(log_filename, "w+")) < 0) {
+	    fprintf(stderr, "unabled to open file %s, error=%s\n",
+		    log_filename, strerror(errno));
+	    exit(1);
+	}
+    }
+
     if (opt_layout) {
 	char* ptr = opt_layout;
 	v = strtol(ptr,&ptr,0);
@@ -711,13 +723,14 @@ int main(int argc, char** argv)
 
 		f18_chan_init(&r708.chan);
 		f18_chan_init(&w708.chan);
+		async_reader_init(&r708);
 
 		if ((master = open_pty(g_pty_name, sizeof(g_pty_name))) < 0) {
 		    fprintf(stderr, "unable to open a pty error=%s (%d)\n",
 			    strerror(errno), errno);
 		    exit(1);
 		}
-		printf("PTY_NAME=%s\n", g_pty_name);
+		PRINTF("PTY_NAME=%s\n", g_pty_name);
 		// open a slave and keep it open so we avoid EIO from
 		// linux clients
 		slave = open(g_pty_name, O_RDWR | O_NOCTTY);
@@ -835,6 +848,7 @@ int main(int argc, char** argv)
 		    np->ioc = &w708.chan;              // io control channel
 		    w708.n.id = 908;
 		    w708.in = &np->chan;              // write from 708
+		    np->n.read_ioreg = read_ioreg_708; // sync buffer read
 		}
 	    }
 	    if (i > 0)
@@ -859,14 +873,14 @@ int main(int argc, char** argv)
 	    j = ID_TO_COLUMN(id);
 	    rt = ConfigMap[i][j].rom;
 	    
-	    printf("Dump ROM\n");
-	    printf("  type=\"%s\"\n", RomMap[rt].name);
-	    printf("  version=\"%s\n", RomMap[rt].vers);
-	    printf("  size=%ld\n", RomMap[rt].size);
-	    printf("  io_type=%d\n", ConfigMap[i][j].io_type);
-	    printf("  io_addr=%03x\n", ConfigMap[i][j].io_addr);
-	    printf("  comm=%03x\n", ConfigMap[i][j].comm);
-	    printf("  reset=%03x\n", ConfigMap[i][j].reset);
+	    PRINTF("Dump ROM\n");
+	    PRINTF("  type=\"%s\"\n", RomMap[rt].name);
+	    PRINTF("  version=\"%s\n", RomMap[rt].vers);
+	    PRINTF("  size=%ld\n", RomMap[rt].size);
+	    PRINTF("  io_type=%d\n", ConfigMap[i][j].io_type);
+	    PRINTF("  io_addr=%03x\n", ConfigMap[i][j].io_addr);
+	    PRINTF("  comm=%03x\n", ConfigMap[i][j].comm);
+	    PRINTF("  reset=%03x\n", ConfigMap[i][j].reset);
 	    
 	    f18_disasm(RomMap[rt].addr, SymTabMap[i][j], ROM_START,
 		       RomMap[rt].size);
@@ -947,7 +961,7 @@ int main(int argc, char** argv)
 	int cpu = 0;
 	cpu_set_t cpuset;
 
-	printf("CPU affinity: %d CPUs available\n", num_cpus);
+	PRINTF("CPU affinity: %d CPUs available\n", num_cpus);
 
 	// pinning to cpu 0,1,2,3
 	//                                    R
@@ -971,7 +985,7 @@ int main(int argc, char** argv)
 	    CPU_ZERO(&cpuset);
 	    CPU_SET(cpu % num_cpus, &cpuset);
 	    pthread_setaffinity_np(r708.thread, sizeof(cpuset), &cpuset);
-	    printf("  async_reader -> CPU %d\n", cpu % num_cpus);
+	    PRINTF("  async_reader -> CPU %d\n", cpu % num_cpus);
 	    cpu++;
 
 	    CPU_ZERO(&cpuset);
@@ -1038,5 +1052,7 @@ int main(int argc, char** argv)
 
     if (tty_fd >= 0)
 	tty_reset(tty_fd);
+    if ((logout != NULL) && (logout != stderr))
+	fclose(logout);
     exit(0);
 }

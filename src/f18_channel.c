@@ -19,7 +19,6 @@
 #include <termios.h>
 #include <libgen.h>
 #include <limits.h>
-#include <pthread.h>
 
 #include "f18.h"
 #include "f18_scan.h"
@@ -73,6 +72,7 @@ static uint18_t select_dirs(node_t* np, uint18_t ioreg)
 
 // update ior status for node "owning" channel 'chan'
 // Uses atomic update for speed, signals condition only if PIN17 changes
+/*
 static void set_ior(chan_t* chan, uint18_t mask)
 {
     reg_node_t* np = chan_to_reg_node(chan);
@@ -88,7 +88,9 @@ static void set_ior(chan_t* chan, uint18_t mask)
         pthread_mutex_unlock(&chan->lock);
     }
 }
+*/
 
+/*
 static void clr_ior(chan_t* chan, uint18_t mask)
 {
     reg_node_t* np = chan_to_reg_node(chan);
@@ -104,6 +106,7 @@ static void clr_ior(chan_t* chan, uint18_t mask)
         pthread_mutex_unlock(&chan->lock);
     }
 }
+*/
 
 //
 // Rendezvous protocol for inter-node communication.
@@ -370,34 +373,6 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
     if (ioreg == IOREG_DATA || ioreg == IOREG_LDATA)
 	return read_io(dp);
 
-    // GPIO wakeup read: suspend until PIN17 matches WD state
-    // WD=0 (reset): wait until PIN17 is HIGH
-    // WD=1: wait until PIN17 is LOW
-    // Applies to ANY read that includes the GPIO direction
-    // FLAG_GPIO_POLL: skip wait, return IOR immediately (for poll loops)
-    if (iodir && (dirs & iodir)) {
-	if (np->flags & FLAG_GPIO_POLL) {
-	    // Poll mode: return current IOR immediately
-	    return read_io(dp);
-	}
-	int wd_state = (np->iow & F18_IO_WD) ? 1 : 0;  // WD bit as written
-	int want_high = !wd_state;  // WD=0 means wait for HIGH
-
-	pthread_mutex_lock(&dp->chan.lock);
-	while (!(np->flags & FLAG_TERMINATE)) {
-	    uint32_t ior_val = __atomic_load_n(&np->ior, __ATOMIC_SEQ_CST);
-	    int pin17_high = (ior_val & F18_IO_PIN17) ? 1 : 0;
-	    if (pin17_high == want_high) {
-		// PIN17 matches desired state - wakeup!
-		pthread_mutex_unlock(&dp->chan.lock);
-		return ior_val;  // Return IOR (caller should drop this)
-	    }
-	    // Wait for PIN17 to change
-	    pthread_cond_wait(&dp->chan.cond, &dp->chan.lock);
-	}
-	pthread_mutex_unlock(&dp->chan.lock);
-	return 0;
-    }
 
     // Phase 1: probe - try to find a writer already waiting
     for (dir = 0; dir < 4; dir++) {
@@ -491,81 +466,134 @@ static inline int sleep_until_ns(struct timespec* tp, long long ns)
     return clock_nanosleep(CLOCK_SOURCE,TIMER_ABSTIME,&until,NULL);
 }
 
-// READ from GPIO (emulated serial port/socket whatever)
+#define BITS_PER_WORD     30  // 3 bytes * 10 bits (start + 8 data + stop)
+#define SAMPLES_PER_BIT   10
+
+// Initialize async_reader sync buffer
+void async_reader_init(async_reader_t* ap)
+{
+    byte_queue_init(&ap->bq);
+    ap->sample_count = 1;
+    ap->bit_count = 0;    
+    ap->first_bit_received = 0;
+}
+
+// read_ioreg for node 708 - synchronous bit delivery
+// Called when 708 reads from IO register
+uint18_t read_ioreg_708(node_t* np, uint18_t ioreg)
+{
+    uint18_t ior_val;
+    int pin17;
+    
+    // Check if this ioreg read includes GPIO direction
+    // For 708, io_addr is set (0x91), so we check if ioreg matches
+    uint18_t iodir = np->io_addr ?
+	dirbits(ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), np->io_addr) : 0;
+    uint18_t dirs = ((ioreg & F18_DIR_MASK) == F18_DIR_BITS) ?
+	dirbits(ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), ioreg) : 0;
+
+    // IOREG_IO (0x15D) is "---D" = GPIO only, handle specially
+    int is_gpio_read = (ioreg == IOREG_IO) || (iodir && (dirs & iodir));
+
+    PRINTF("read_ioreg_708: ioreg=0x%03x iodir=0x%x dirs=0x%x gpio=%d\n",
+	   ioreg, iodir, dirs, is_gpio_read);
+
+    // If not a GPIO read, use default handler
+    if (!is_gpio_read) {
+	PRINTF("read_ioreg_708: not GPIO, fallback\n");
+	return f18_read_ioreg(np, ioreg);
+    }
+
+    pin17 = byte_queue_curr(&r708.bq);
+    if (r708.sample_count <= 0) {  // next bit
+	if (r708.bit_count < BITS_PER_WORD) {
+	    // Within word or starting new word
+	    pin17 = byte_queue_deq(&r708.bq);  // May block if empty
+	    r708.bit_count++;
+	    // After bit 5 (sync pattern), add half-bit delay for center sampling
+	    switch(r708.bit_count) {
+	    case 8:  // sample 1.5 bit (stretch B0 instead of B0,START
+	    case 12:
+	    case 22:
+		r708.sample_count = SAMPLES_PER_BIT + (SAMPLES_PER_BIT / 2);
+		PRINTF("708/ bit=%d, pin=%d count=%d\n",
+		       r708.bit_count, pin17, r708.sample_count);
+		break;
+	    default:  // sample 1 bit
+		r708.sample_count = SAMPLES_PER_BIT;
+		PRINTF("708/ bit=%d,pin=%d,count=%d\n",
+		       r708.bit_count, pin17, r708.sample_count);
+	    }
+	}
+	else {
+	    // After 30 bits - get next word (block if needed)
+	    r708.bit_count = 0;  // Reset for next word
+	    PRINTF("708/ word done, waiting for next\n");
+	    pin17 = byte_queue_deq(&r708.bq);  // Block until next frame
+	    r708.bit_count++;
+	    r708.sample_count = SAMPLES_PER_BIT;
+	}
+    }
+    r708.sample_count--;
+
+    // Build IOR value with current PIN17 state
+    ior_val = __atomic_load_n(&np->ior, __ATOMIC_SEQ_CST);
+    if (pin17)
+	ior_val |= F18_IO_PIN17;
+    else
+	ior_val &= ~F18_IO_PIN17;
+    return ior_val;
+}
+
+// READ from GPIO - fills bit buffer for 708 to consume
 void async_reader(async_reader_t* ap)
 {
-    int count = 0;
-    // int wi = 0;
-    uint32_t bits = 0;
-    // uint18_t word = 0;
-    // uint18_t sync = 0;
-    // No scaling needed - ROM auto-calibrates from sync pattern
-    // Just use consistent timing within each 18-bit word
-    long long bit_time_ns = 1000000000 / ap->baud;
-    struct timespec word_start_time;
-    int bit_in_word;        // Bit counter within 18-bit word (0-29 for 3 bytes)
-
-    printf("async_reader: started baud=%d, bit_time=%lld ns\n",
-	   ap->baud, bit_time_ns);
+    printf("async_reader: started baud=%d (sync buffer mode)\n", ap->baud);
 
     tcflush(ap->fd, TCIFLUSH);
     set_blocking(ap->fd, 1);
 
     while(!ap->chan.terminate) {
+	uint8_t w18[3];
 	int n;
 
-	bit_in_word = 0;
-	while((count > 0) && !ap->chan.terminate) {
-	    uint18_t bit = ((bits >> 29) & 1);
-	    chan_t* rp = ap->out;
-	    long long word_ns;
+	if ((n = read(ap->fd, w18, 3)) == 3) {
+	    uint8_t bits[30];  // 3 bytes * 10 bits each
+	    int bi = 0;
+	    int i, j;
 
-	    // Invert for F18: UART mark (1) = PIN17 LOW, UART space (0) = PIN17 HIGH
-	    // F18 expects: idle=LOW, start bit=HIGH (inverted from TTL UART)
-	    if (bit)
-		set_ior(rp, F18_IO_PIN17);  // space/start → HIGH
-	    else
-		clr_ior(rp, F18_IO_PIN17);  // mark/idle → LOW
+	    // Build all 30 bits first
+	    for (i = 0; i < 3; i++) {
+		uint8_t b0 = ~w18[i];  // invert all bits
 
-	    // Absolute time within 18-bit word (3 bytes = 30 bits)
-	    bit_in_word++;
-	    word_ns = bit_in_word*bit_time_ns;
-	    sleep_until_ns(&word_start_time, word_ns);
+		// Start bit (HIGH after inversion)
+		bits[bi++] = 1;
 
-	    bits <<= 1;
-	    count--;
-	}
-
-    again:
-	if (!ap->chan.terminate) {
-	    uint8_t w18[3];
-	    if ((n = read(ap->fd, w18, 3)) == 3) {
-		int i;
-		get_time_ns(&word_start_time);
-		bits = 0;
-		
-		for (i = 0; i < 3; i++) {
-		    uint8_t b0 = ~w18[i];  // invert all bits (again)
-		    int n = 8;
-		    // reverse bits (as sent from uart)
-		    bits = (bits << 1) | 1;  // start bit
-		    while(n--) {
-			bits = (bits << 1) | (b0 & 1);
-			b0 >>= 1;
-		    }
-		    bits = (bits << 1) | 0;  // stop bit
+		// 8 data bits (LSB first)
+		for (j = 0; j < 8; j++) {
+		    bits[bi++] = b0 & 1;
+		    b0 >>= 1;
 		}
-		count = 30;
+		// Stop bit (LOW after inversion)
+		bits[bi++] = 0;
 	    }
-	    else if (n == 0) {
-		PRINTF("async_reader: read 0 bytes\n");
-		goto again;
-	    }
-	    else if (n < 0) {
-		ERRORF("async_reader: read error %d (%s)\n",
-		       errno, strerror(errno));
-		return;
-	    }
+
+	    // Push all 30 bits atomically
+	    byte_queue_enq_batch(&ap->bq, bits, 30);
+
+	    PRINTF("async_reader: deliverd bytes 0x%02x%02x%02x\n",
+		   w18[2], w18[1], w18[0]);
+	}
+	else if (n == 0) {
+	    // No data, retry
+	    continue;
+	}
+	else if (n < 0) {
+	    if (errno == EINTR)
+		continue;
+	    ERRORF("async_reader: read error %d (%s)\n",
+		   errno, strerror(errno));
+	    return;
 	}
     }
 }

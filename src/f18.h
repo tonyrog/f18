@@ -322,6 +322,7 @@ typedef struct _node_t {
 } node_t;
 
 extern uint18_t g_flags;
+extern FILE* logout;
 
 #ifdef DEBUG
 #define VERBOSE(np,fmt,...) do {					\
@@ -330,11 +331,13 @@ extern uint18_t g_flags;
     } while(0)
 #define TRACE(np,fmt, ...) do {				\
 	if (!(g_flags & FLAG_SILENT) && (((node_t*)(np))->flags & FLAG_TRACE)) \
-	    fprintf(stderr, "[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
+	    fprintf(logout, "[%03d]: "fmt,((node_t*)(np))->id,__VA_ARGS__); \
     } while(0)
 #define PRINTF(fmt...) do {			\
-	if (!(g_flags & FLAG_SILENT))		\
-	    fprintf(stderr,fmt);	\
+	if (!(g_flags & FLAG_SILENT)) {		\
+	    fprintf(logout,fmt);			\
+	    fflush(logout);			\
+	}					\
     } while(0)
 #else
 #define VERBOSE(np,fmt, ...)
