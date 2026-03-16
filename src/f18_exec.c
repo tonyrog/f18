@@ -21,7 +21,7 @@
 #include <assert.h>
 
 #include "f18.h"
-#include "f18_scan.h"
+#include "f18_asm.h"
 #include "f18_node.h"
 #include "f18_async.h"
 #include "f18_serdes.h"
@@ -858,8 +858,8 @@ int main(int argc, char** argv)
 	// temporary symbol table memory used while loading node
 	INIT_SYMTAB(&symtab, heap, MAX_SCAN_HEAP_SIZE);
 
-	while((r = f18_scan_line(file_fd,&line,linebuf,sizeof(linebuf),
-				 &addr, &nid, np->ram, &symtab)) >= 0) {
+	while((r = f18_asm_line(file_fd,&line,linebuf,sizeof(linebuf),
+				&addr, &nid, np->ram, &symtab)) >= 0) {
 	    switch(r) {
 	    case META_NODE:
 		if (np != NULL) { // find main in symtab

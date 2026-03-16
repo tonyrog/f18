@@ -103,18 +103,20 @@ done:
 
 //
 //  <<slot0:5>> <<slot1:5> <<<slot2:5> <<slot3:3>>
-// 
+//  return number of @p found in instruction
+//  -1 on error
 
 int f18_disasm_instruction(uint18_t addr, uint18_t I,
 			   const f18_symbol_table_t* symtab,
 			   char* ptr, size_t maxlen)
 {
-    char* ptr0 = ptr;
+    // char* ptr0 = ptr;
     char* ptr_end = ptr + maxlen;
     uint18_t I0 = I;
     int i;
     int n = 4;
     int d;
+    int np = 0;
     
     I <<= 2;
     for (i = 0; i < 4; i++) {
@@ -126,6 +128,7 @@ int f18_disasm_instruction(uint18_t addr, uint18_t I,
 	memcpy(ptr, ins_name, m);
 	ptr += m;
 	switch(ins) {
+	case INS_FETCH_P: np++; break;
 	case INS_RETURN:
 	case INS_EXECUTE:
 	    goto done;
@@ -141,7 +144,7 @@ int f18_disasm_instruction(uint18_t addr, uint18_t I,
 	n--;
     }
     if (ptr < ptr_end) *(ptr-1) = '\0';
-    return ptr - ptr0;
+    return np; // return ptr - ptr0;
 load:
     switch(n) {
     case 4: I = (addr & ~MASK10) | ((I0 ^ IMASK) & MASK10); break;
@@ -186,23 +189,33 @@ load:
 
 done:
     if (ptr < ptr_end) *ptr++ = '\0';
-    return ptr - ptr0;    
+    return np; // ptr - ptr0;    
 }
 
 void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
 		uint18_t addr, size_t n)
 {
+    int np = 0;
+    
     while(n--) {
 	char ins_buf[32];
-	uint32_t val = *insp++ ^ IMASK;
+	uint32_t val0 = *insp++;
+	uint32_t val = val0 ^ IMASK;
 	int i = 0;
 
-	f18_disasm_instruction(addr+1, val, symtab, ins_buf, sizeof(ins_buf));
-	if ((i = find_symbol_by_addr(addr, symtab)) != -1) {
-	    fprintf(stdout, "%s%s:\n", symtab->symbol[i].name,
-		    (addr & 0x200)?".p":"");
+	if (np > 0) {
+	    fprintf(stdout, "%03x: %05x: %05x\n", addr, val, val0);
+	    np--;
 	}
-	fprintf(stdout, "%03x: %05x: %s\n", addr, val, ins_buf);
+	else {
+	    np = f18_disasm_instruction(addr+1, val, symtab,
+					ins_buf, sizeof(ins_buf));
+	    if ((i = find_symbol_by_addr(addr, symtab)) != -1) {
+		fprintf(stdout, "%s%s:\n", symtab->symbol[i].name,
+			(addr & 0x200)?".p":"");
+	    }
+	    fprintf(stdout, "%03x: %05x: %s\n", addr, val, ins_buf);
+	}
 	addr++;
     }
 }

@@ -4,9 +4,8 @@
 #include <string.h>
 
 #include "f18_sym.h"
-#include "f18_scan.h"
+#include "f18_asm.h"
 #include "f18_strings.h"
-
 
 /*
 int lookup_symbol(char** pptr, const f18_symbol_table_t* symtab)
@@ -221,12 +220,12 @@ done:
 //   -3  EOF (closed)
 //
 //
-int f18_scan_line(int fd,
-		  int* line_ptr,
-		  char* line_buf,
-		  size_t line_buf_size,
-		  uint18_t* addr_ptr,uint18_t* node_ptr,
-		  uint18_t* mem_ptr, f18_symbol_table_t* symtab)
+int f18_asm_line(int fd,
+		 int* line_ptr,
+		 char* line_buf,
+		 size_t line_buf_size,
+		 uint18_t* addr_ptr,uint18_t* node_ptr,
+		 uint18_t* mem_ptr, f18_symbol_table_t* symtab)
 {
     int i, r;
     char* ptr;

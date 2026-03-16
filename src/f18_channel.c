@@ -21,7 +21,7 @@
 #include <limits.h>
 
 #include "f18.h"
-#include "f18_scan.h"
+#include "f18_asm.h"
 #include "f18_node.h"
 #include "f18_debug.h"
 
