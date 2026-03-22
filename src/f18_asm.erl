@@ -16,7 +16,7 @@
 -export([parse_op/2, parse_op/1]).
 
 -export([baud/1]).
--export([demo/0]).
+-export([demo/1]).
 -export([boot_708/0, boot_708/2]).
 
 -include("f18.hrl").
@@ -170,19 +170,17 @@ iodest() ->
 	"tty"    => 16#103
      }.
 
+%% aliases and macros
 macros() ->
     #{  
 	'band' => ['and'],
 	'bnot' => [inv],
 	'bxor' => ['xor'],
 	'swap' => [over,'>r','>r',drop,'r>','r>'],
-	%% A or B == (A xor B) xor (A and B)
-	%% A or B == ~(~A and ~B)
-	%% 
-	%% bor = [ 'swap', 'bnot', 'band', 'bnot'],
-	'bor' => ['bnot', 'over', 'bnot', 'band', 'bnot', 
-		  '>r', drop, 'r>'],
-	%% 
+	%% A or B == (A xor B) + (A and B)
+	'bor' => [over,over,'and',
+		  '>r','xor','r>','+'],  %% + fits in slot 3!
+	%% assume stack not empty - but F18 is circular so always ok...
 	'zero' => [dup,dup,'xor'],
 	%% A--
 	'dec' => ['zero','bnot','+']
@@ -194,7 +192,12 @@ baud(Opts) ->
 
 %% RAM code needed to send words and bytes
 code708(Opts) ->
-    RAM = 
+    Opts1 = Opts#{ {def,"send"} => 0,
+		   {def,"_send8"} => 4,
+		   {def,"_loop"} => 8,
+		   {def,"_send1"} => 12,
+		   {def,"exit"} => 19 },
+    SendLib = 
 	[
 	 [{word,"node"}, 708],
 	 %% : send = 0
@@ -224,65 +227,48 @@ code708(Opts) ->
 	 ['@p', {jump,{label,"_send8"}}],
 	 [1]
 	],
-    Opts1 = Opts#{ {def,"send"} => 0,
-		   {def,"_send8"} => 4,
-		   {def,"_loop"} => 8,
-		   {def,"_send1"} => 12,
-		   {def,"exit"} => 19
-	   },
-    UPLOAD = 
+    Main = 
 	[
-	 ['@p', 'a!', '@p', '-'],
-	 [0],
-	 [length(RAM)-1],
-	 ['>r', '.', '.', '.'],
-	 ['@p', '!+', 'unext', '.']
-	],
-    %% TEST function
-    STREAM = 
-	UPLOAD ++ RAM ++
-	[
-	 %% ['@p', 'b!','.','.'],
-	 %% [{word,"io"}],
 	 ['@p', {call,{label,"send"}}],
-	 [$O],
+	 [{literal,$O}],
 	 [drop, '@p', '.', '.'],
-	 [$K],
+	 [{literal,$K}],
 	 [{call,{label,"send"}}],
 	 [drop, '@p', '.', '.'],
-	 [$\n],
+	 [{literal,$\n}],
 	 [{call,{label,"send"}}],
-	 [drop, {call, {label,"exit"}}]
+	 [drop, ';']
 	],
-    {STREAM, Opts1}.
+    {SendLib ++ Main, length(SendLib), Opts1}.
 
-demo() ->
-    Opts = #{ rom => basic, encode => true, baud => 115200 },
-    {Lines,Opts1} = code708(Opts),
-    {ok, Code} = asm_lines(Lines, Opts1),
-    {ok,U,Pid} = start_uart(Opts1),
-    f18_uart:send(U, Code),
-    Pid ! stop.
+demo(DeviceName) ->
+    Opts = #{ device => DeviceName, rom => basic, 
+	      encode => true, baud => 115200 },
+    {Asm,Compleation,Opts1} = code708(Opts),
+    boot_708_code(Opts1, Compleation, 0, Asm).
 
 %% load a simple code sequence
 %% 
 boot_708() ->
-    boot_708(target, #{ rom => async_boot, encode => true, 
-			baud => 300 }).
+    boot_708(target, #{ rom => async_boot, encode => true, baud => 300 }).
 boot_708(DeviceName, Opts) ->
     Opts1 = maps:merge(#{ rom => async_boot, encode => true, 
-			  device => DeviceName, baud => 300 }, Opts),
+			 device => DeviceName, baud => 300 }, Opts),
+    boot_708_code(Opts1, 16#aa, 0, 
+		  [[{literal,I}] || I <- [0,1,2,3,4,5,6,7,8,9]]).
+		  
+boot_708_code(Opts, Compleation, Transfer, Asm) ->
+    N = length(Asm),
     Bootstream =
-	[[{literal, 16#aa}],  %% compleation address (cold)
-	 [{literal, 0}],      %% transfer  adddress (start in RAM[0])
-	 [{literal, 10}]] ++  %% load 10 words
-	[ [{literal,I}] || I <- lists:seq(1,10) ],
-    {ok, Code} = asm_lines(Bootstream, Opts1),
-    {ok,U,Pid} = start_uart(Opts1),
+	[[{literal, Compleation}],  %% compleation address (cold)
+	 [{literal, Transfer}],   %% transfer  adddress (start in RAM[0])
+	 [{literal, N}] | Asm ],
+    {ok, Code} = asm_lines(Bootstream, Opts),
+    {ok,U,Pid} = start_uart(Opts),
     f18_uart:send(U, Code),
     %% wait some time
     timer:sleep(3000),
-    Pid ! stop.
+    Pid ! stop.    
     
 
 send(Filename) ->

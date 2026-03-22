@@ -88,6 +88,7 @@ inv
 invert
 ip++
 jump
+ldata
 lsh
 negate
 next

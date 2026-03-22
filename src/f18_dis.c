@@ -15,8 +15,8 @@
 // symtab is currenlty a rom symbol table.
 // return the pointer to the start of the disassembled output
 // the output is 0 terminated
-char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,
-		      const f18_symbol_table_t* symtab,
+char* f18_disasm_uins(int slot, uint18_t addr, uint18_t I,
+		      f18_voc_t voc,
 		      char** pptr, size_t maxlen)
 {
     char* ptr = *pptr;
@@ -26,10 +26,11 @@ char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,
     int d;
     uint5_t ins;
     const char* ins_name;
+    symindex_t si;
     int l, r, m;
     
     I <<= 2;
-    I <<= (i*5);
+    I <<= (slot*5);
     
     ins = (I >> 15) & 0x1f;
     ins_name = f18_ins[ins].name;
@@ -54,24 +55,17 @@ char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,
     return ptr0;
     
 load:
-    switch(i) {
+    switch(slot) {
     case 0: I = (addr & ~MASK10) | ((I0 ^ IMASK) & MASK10); break;
     case 1: I = (addr & ~MASK8)  | ((I0 ^ IMASK) & MASK8); break;
     case 2: I = (addr & ~MASK3)  | ((I0 ^ IMASK) & MASK3); break;
     }
     if (ptr < ptr_end) *ptr++ = ':';
-    if ((i = find_symbol_by_addr(I, symtab)) != -1) {
-	int l = SYMLEN(&symtab->symbol[i]);
+    if ((si = voc_find_by_addr(I, voc)) != NOSYM) {
+	int l = VOC_SYMLEN(voc, si);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
-	memcpy(ptr, symtab->symbol[i].name, m);
-	ptr += m;
-    }
-    else if ((i = find_symbol_by_addr(I, &io_symtab)) != -1) {
-	int l = SYMLEN(&io_symtab.symbol[i]);
-	int r = (ptr_end - ptr);
-	int m = (r > l) ? l : r;
-	memcpy(ptr, io_symtab.symbol[i].name, m);
+	memcpy(ptr, VOC_SYMNAM(voc, si), m);
 	ptr += m;
     }
     else { // decimal. configure? 3, 8, 10-bit
@@ -107,7 +101,7 @@ done:
 //  -1 on error
 
 int f18_disasm_instruction(uint18_t addr, uint18_t I,
-			   const f18_symbol_table_t* symtab,
+			   f18_voc_t voc,
 			   char* ptr, size_t maxlen)
 {
     // char* ptr0 = ptr;
@@ -117,6 +111,7 @@ int f18_disasm_instruction(uint18_t addr, uint18_t I,
     int n = 4;
     int d;
     int np = 0;
+    symindex_t si;
     
     I <<= 2;
     for (i = 0; i < 4; i++) {
@@ -152,18 +147,11 @@ load:
     case 2: I = (addr & ~MASK3)  | ((I0 ^ IMASK) & MASK3); break;
     }
     if (ptr < ptr_end) *ptr++ = ':';
-    if ((i = find_symbol_by_addr(I, symtab)) != -1) {
-	int l = SYMLEN(&symtab->symbol[i]);
+    if ((si = voc_find_by_addr(I, voc)) != NOSYM) {
+	int l = VOC_SYMLEN(voc, si);
 	int r = (ptr_end - ptr);
 	int m = (r > l) ? l : r;
-	memcpy(ptr, symtab->symbol[i].name, m);
-	ptr += m;
-    }
-    else if ((i = find_symbol_by_addr(I, &io_symtab)) != -1) {
-	int l = SYMLEN(&io_symtab.symbol[i]);
-	int r = (ptr_end - ptr);
-	int m = (r > l) ? l : r;
-	memcpy(ptr, io_symtab.symbol[i].name, m);
+	memcpy(ptr, VOC_SYMNAM(voc, si), m);
 	ptr += m;
     }
     else { // decimal. configure? 3, 8, 10-bit
@@ -192,8 +180,7 @@ done:
     return np; // ptr - ptr0;    
 }
 
-void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
-		uint18_t addr, size_t n)
+void f18_disasm(const uint18_t* insp, f18_voc_t voc, uint18_t addr, size_t n)
 {
     int np = 0;
     
@@ -201,17 +188,17 @@ void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
 	char ins_buf[32];
 	uint32_t val0 = *insp++;
 	uint32_t val = val0 ^ IMASK;
-	int i = 0;
+	symindex_t si;
 
 	if (np > 0) {
 	    fprintf(stdout, "%03x: %05x: %05x\n", addr, val, val0);
 	    np--;
 	}
 	else {
-	    np = f18_disasm_instruction(addr+1, val, symtab,
+	    np = f18_disasm_instruction(addr+1, val, voc,
 					ins_buf, sizeof(ins_buf));
-	    if ((i = find_symbol_by_addr(addr, symtab)) != -1) {
-		fprintf(stdout, "%s%s:\n", symtab->symbol[i].name,
+	    if ((si = voc_find_by_addr(addr, voc)) != NOSYM) {
+		fprintf(stdout, "%s%s:\n", VOC_SYMNAM(voc,si),
 			(addr & 0x200)?".p":"");
 	    }
 	    fprintf(stdout, "%03x: %05x: %s\n", addr, val, ins_buf);

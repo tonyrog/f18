@@ -4,9 +4,13 @@
 #include <stdlib.h>
 #include "f18_types.h"
 
-#define SYMLEN(sym) (sym)->name[-1]
-#define SYMTYP(sym) (sym)->name[-2]
+#define SYMNAM(sym) ((sym)->name)
+#define SYMLEN(sym) ((sym)->name[-1])
+#define SYMTYP(sym) ((sym)->name[-2])
 #define SYMSTR(Name) ((char*)CAT2(SN_,Name)+2)
+
+#define SYMTYP_RESOLVED   'R'
+#define SYMTYP_UNRESOLVED 'U'
 
 typedef struct {
     uint18_t value;
@@ -26,9 +30,6 @@ typedef struct {
     f18_symbol_t* next;   // next slot to insert to
     char*    dp;        // name pointer from low heap to high
 } f18_symbol_table_t;
-
-// array of symbols tables stack to search in 
-typedef f18_symbol_t* f18_voc_t;
 
 #define RESET_SYMTAB(sp) do {						\
 	(sp)->symbol = (f18_symbol_t*) ((sp)->heap);			\
@@ -51,25 +52,40 @@ typedef f18_symbol_t* f18_voc_t;
   .next = ((f18_symbol_t*)(sarr))+(sizeof((sarr))/sizeof(f18_symbol_t)), }
 
 extern const f18_symbol_t f18_ins[32];
-extern const f18_symbol_table_t f18_ins_symtab;
+extern const f18_symbol_table_t ins_symbols;
+extern const f18_symbol_table_t no_symbols;
+extern const f18_symbol_table_t io_symbols;
 
-extern int find_symbol_by_namelen(const char* name, int len,
+// 18 bit symbol index value
+//                  0:1 0:4   index:13    from sym_xxx functions
+//                  1:1 voc:4 index:13    from voc_xxx functions
+//
+// index = 3ffff  = not found
+//
+#define NOSYM 0x3ffff
+#define SYM_INDEX(sym) ((sym) & 0x1fff)
+#define VOC_INDEX(sym) (((sym) >> 13) & 0xf)
+#define HAS_VOC(sym)   (((sym) >> 17) & 0x1)
+#define MAKE_SYM(vi,si) ((((vi) & 0xf)<<13) | ((si) & 0x1fff))
+typedef uint18_t symindex_t;
+
+extern symindex_t sym_find_by_namelen(const char* name, int len,
 				  const f18_symbol_table_t* symtab);
-extern int find_symbol_by_name(const char* name, const f18_symbol_table_t* symtab);
-extern int find_symbol_by_value(uint18_t value, const f18_symbol_table_t* symtab);
-extern int find_symbol_by_addr(uint18_t addr, const f18_symbol_table_t* symtab);
+extern symindex_t sym_find_by_name(const char* name, const f18_symbol_table_t* symtab);
+extern symindex_t sym_find_by_value(uint18_t value, const f18_symbol_table_t* symtab);
+extern symindex_t sym_find_by_addr(uint18_t addr, const f18_symbol_table_t* symtab);
 
-extern int insert_symbol(char* word, int len, f18_symbol_table_t* symtab);
+extern symindex_t sym_insert(char* word, int len, f18_symbol_table_t* symtab);
 
-extern int insert_patch(int i, int slot, uint18_t addr,
+extern int sym_insert_patch(symindex_t si, int slot, uint18_t addr,
+			    f18_symbol_table_t* symtab);
+
+extern void sym_resolve(symindex_t si, uint18_t addr, uint18_t* ram,
 			f18_symbol_table_t* symtab);
 
-extern void resolve_symbol(int i, uint18_t addr, uint18_t* ram,
-			   f18_symbol_table_t* symtab);
+extern symindex_t sym_add(char* name, int len, uint18_t addr,
+			  uint18_t* ram, f18_symbol_table_t* symtab);
 
-extern int add_symbol(char* name, int len, int slot, uint18_t addr,
-		      uint18_t* ram, f18_symbol_table_t* symtab);
-
-extern f18_symbol_table_t* copy_symbols(f18_symbol_table_t* src);
+extern f18_symbol_table_t* sym_copy_table(f18_symbol_table_t* src);
 
 #endif

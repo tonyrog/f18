@@ -348,7 +348,7 @@ static int decode_instruction(node_t* np, uint18_t addr, uint18_t word,
         if (is_branch_opcode(opcode)) {
             // Calculate destination address
             uint18_t dest;
-	    int i;
+	    symindex_t si;
 	    switch(s) {
 	    case 0: dest = (addr & ~MASK10) | (word & MASK10); break;
             case 1: dest = (addr & ~MASK8) | (word & MASK8); break;
@@ -356,9 +356,9 @@ static int decode_instruction(node_t* np, uint18_t addr, uint18_t word,
 	    default: dest = 0; // Slot 3 branch not possible
 	    }
             dests[s] = dest;
-	    if ((i = find_symbol_by_addr(dest, np->symtab)) >= 0)
+	    if ((si = sym_find_by_addr(dest, np->symtab)) != NOSYM)
 		snprintf(slots[s], 16, "%s:%s", f18_ins[opcode].name,
-			 np->symtab->symbol[i].name);
+			 np->symtab->symbol[si].name);
 	    else
 		snprintf(slots[s], 16, "%s:%03x", f18_ins[opcode].name, dest);
             num_slots = s + 1;

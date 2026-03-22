@@ -178,6 +178,8 @@ const char SN_invert[] = { 'R', 6, 105,110,118,101,114,116,0};
 const char SN_ip_PLUS_PLUS[] = { 'R', 4, 105,112,43,43,0};
 // string: "jump"
 const char SN_jump[] = { 'R', 4, 106,117,109,112,0};
+// string: "ldata"
+const char SN_ldata[] = { 'R', 5, 108,100,97,116,97,0};
 // string: "lsh"
 const char SN_lsh[] = { 'R', 3, 108,115,104,0};
 // string: "negate"

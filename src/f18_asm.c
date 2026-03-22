@@ -4,36 +4,15 @@
 #include <string.h>
 
 #include "f18_sym.h"
+#include "f18_voc.h"
 #include "f18_asm.h"
 #include "f18_strings.h"
 
-/*
-int lookup_symbol(char** pptr, const f18_symbol_table_t* symtab)
-{
-    char* ptr = *pptr;
-    f18_symbol_t* sp = symtab->next - 1;
-    int n = symtab->next - symtab->symbol;
-
-    while(n) {
-	int len = SYMLEN(sp);
-	if (strncmp(ptr, sp->name, len) == 0) {
-	    if ((ptr[len] == '\0') || isblank(ptr[len])) {
-		*pptr = ptr + len;
-		return n-1;
-	    }
-	}
-	sp--;
-	n--;
-    }
-    return -1;  // not found
-}
-*/
-
 int parse_mnemonic(char* word, int len)
 {
-    int i;
-    if ((i = find_symbol_by_namelen(word, len, &f18_ins_symtab)) >= 0)
-	return i;
+    symindex_t si;
+    if ((si = sym_find_by_namelen(word, len, &ins_symbols)) != NOSYM)
+	return f18_ins[si].value;
     if ((len == 3) && (memcmp(word, "org", 3) == 0))
 	return META_ORG;
     if ((len == 4) && (memcmp(word, "node", 4) == 0))
@@ -57,47 +36,95 @@ uint18_t encode_dest(int enc, uint18_t instr, uint18_t mask,
 
 //
 // parse:
-//   
-//   ( '(' .* ')' )* <mnemonic>
-//   ( '(' .* ')' )* <mnemonic>':'<dest>
-//   ( '(' .* ')' )* <hex>
-//   ( '(' .* ')' )* \<blank> .*
+//   <mnemonic>
+//   <mnemonic>':'<dest>
+//   <hex>
+//   <blank>
 //
+
+// skip to next character, skip blank and comments
+// (could be more FORTHy)
+static char* next_non_blank(char* ptr)
+{
+    while(*ptr) {
+	switch(*ptr) {
+	case '\0': return ptr;
+	case ' ':  ptr++; break;
+	case '\t': ptr++; break;
+	case '(':
+	    ptr++; while(*ptr && (*ptr != ')')) ptr++;
+	    if (*ptr == ')') ptr++;
+	    break;
+	case '\\': ptr++; while(*ptr) ptr++; return ptr;
+	default: return ptr;
+	}
+    }
+    return ptr;
+}
+
+// skip non blanks
+static char* next_blank(char* ptr)
+{
+    while(*ptr) {
+	switch(*ptr) {
+	case '\0': return ptr;
+	case ' ':  return ptr;
+	case '\t': return ptr;
+	default: ptr++; break;
+	}
+    }
+    return ptr;
+}
+
+static int is_number(char* arg, int len, uint18_t* valp)
+{
+    uint18_t value = 0;
+    char* ptr = arg;
+    int n = 0;
+
+    if ((ptr[0] == '0')) {
+	if (ptr[1] == 'x') ptr += 2;	
+	while(isxdigit(*ptr)) {
+	    if ((*ptr >= '0') && (*ptr <= '9'))
+		value = (value << 4) + (*ptr-'0');
+	    else if ((*ptr >= 'A') && (*ptr <= 'F'))
+		value = (value << 4) + ((*ptr-'A')+10);
+	    else
+		value = (value << 4) + ((*ptr-'a')+10);
+	    ptr++;
+	    n++;
+	}
+	*valp = value;
+	return (n > 0);
+    }
+    else {
+	while(isdigit(*ptr)) {
+	    value = value*10 + (*ptr-'0');
+	    ptr++;
+	    n++;
+	}
+    }
+    *valp = value;
+    return (n > 0);    
+}
+  
 
 int parse_ins(char** pptr,uint18_t* insp,
 	      int slot, uint18_t addr,
 	      uint18_t* dstp,
-	      f18_symbol_table_t* symtab)
+	      f18_voc_t voc)
 {
     char* ptr = *pptr;
     char* word;
-    const char* arg;
+    char* arg;
     uint18_t value = 0;
-    int i;
+    symindex_t si;
     int len = 0;
     int ins;
     int want_arg = 0;
-    int r = 0;
 
-    while(r || isblank(*ptr) || (*ptr == '(')) {
-	while(isblank(*ptr)) ptr++;
-	// what abount '\' ? still skip to end-of-line?
-	if (*ptr == '\\')
-	    goto back;
-	if (*ptr == '(') {
-	    r++;
-	    ptr++;
-	    while(*ptr && (*ptr != ')'))
-		ptr++;
-	    if (*ptr == ')')
-		r--;
-	    if (*ptr) ptr++;
-	}
-    }
-back:
-    if ( (*ptr == '\\') && (isblank(*(ptr+1)) || (*(ptr+1)=='\0')) ) {
-	while(*ptr != '\0') ptr++;  // skip rest
-    }
+    ptr = next_non_blank(ptr);
+    // printf("INS: %s\n", ptr);
     word = ptr;
     while (*ptr && !isblank(*ptr) && (*ptr != ':')) { ptr++; len++; }
     if ((len == 0) && (ptr[0] == ':')) {
@@ -138,63 +165,37 @@ back:
     }
 
 dest_arg: // parse number or dest
-    while (*ptr && isblank(*ptr)) ptr++;
+number_arg:
+    ptr = next_non_blank(ptr);
     arg = ptr;
-    while(*ptr && !isblank(*ptr)) { len++; ptr++; }
-    if ((i = find_symbol_by_namelen(arg, len, &io_symtab)) >= 0) {
-	value = io_symtab.symbol[i].value;
+    ptr = next_blank(ptr);
+    len = ptr - arg;
+    if (is_number(arg, len, &value))
+	goto done;
+    if ((si = sym_find_by_namelen(arg, len, &io_symbols)) != NOSYM) {
+	value = io_symbols.symbol[si].value;
 	len = 1;
 	goto done;
     }
-    else if ((i = find_symbol_by_namelen(arg, len, symtab)) >= 0) {
-	if (SYMTYP(&symtab->symbol[i]) == 'R') { // unresolved
-	    value = symtab->symbol[i].value;
-	    // printf("dest: %s = %03x\n", symtab->symbol[i].name, value);
+    else if ((si = voc_find_by_namelen(arg, len, voc)) != NOSYM) {
+	if (VOC_SYMTYP(voc, si) == 'R') { // unresolved
+	    value = VOC_SYMVAL(voc, si);
 	}	
-	else if (SYMTYP(&symtab->symbol[i]) == 'U') { // unresolved
-	    insert_patch(i, slot, addr, symtab);
+	else if (VOC_SYMTYP(voc, si)== 'U') { // unresolved
+	    voc_insert_patch(si, slot, addr, voc);
 	    value = 0;
 	}
 	len = 1;
 	goto done;
     }
-    // dest was not a symbol, restore ptr
     ptr = (char*) arg;
-number_arg: 	// 0xabcd | 0b1010 | 0abcd (hex) | 123 (dec)
-    len = 0;
-    while (*ptr && isblank(*ptr)) ptr++; // may enter here multiple ways
-    if ((ptr[0] == '0') && (ptr[1] == 'x')) {
-	ptr += 2;
-	goto hex;
-    }
-    if (ptr[0] =='0')
-	goto hex;
-// dec:   
-    while(isdigit(*ptr)) {
-	value = value*10 + (*ptr-'0');
-	ptr++;
-	len++;
-    }
-    goto done;
-hex:
-    while(isxdigit(*ptr)) {
-	if ((*ptr >= '0') && (*ptr <= '9'))
-	    value = (value << 4) + (*ptr-'0');
-	else if ((*ptr >= 'A') && (*ptr <= 'F'))
-	    value = (value << 4) + ((*ptr-'A')+10);
-	else
-	    value = (value << 4) + ((*ptr-'a')+10);
-	ptr++;
-	len++;
-    }
-    goto done;
+
 done:
     if (want_arg && (len == 0)) {
 	char* name = ptr;
-	int i;
 	while(*ptr && !isblank(*ptr)) { len++; ptr++; }
-	if ((i = insert_symbol(name, len, symtab)) >= 0) {
-	    insert_patch(i, slot, addr, symtab);
+	if ((si = voc_insert(name, len, voc)) != NOSYM) {
+	    voc_insert_patch(si, slot, addr, voc);
 	}
     }
     *pptr = ptr;
@@ -225,7 +226,7 @@ int f18_asm_line(int fd,
 		 char* line_buf,
 		 size_t line_buf_size,
 		 uint18_t* addr_ptr,uint18_t* node_ptr,
-		 uint18_t* mem_ptr, f18_symbol_table_t* symtab)
+		 uint18_t* mem_ptr, f18_voc_t voc)
 {
     int i, r;
     char* ptr;
@@ -263,13 +264,12 @@ again:
     line_buf[i] = '\0';
     ptr = line_buf;
     // printf("LINE: %d: %s\n", *line_ptr, line_buf);
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
     // printf("i = %d, insx=%03x, dest=%05x\n", i, insx, dest);
     switch(i) {
     case TOKEN_EMPTY:
 	goto again;
     case TOKEN_MNEMONIC1:
-	// printf("[%s]", f18_ins[insx].name);
 	ins = (insx << 13);
 	break;
     case TOKEN_MNEMONIC2:
@@ -279,7 +279,7 @@ again:
 	    while(*ptr && isblank(*ptr)) ptr++;
 	    name = ptr;
 	    while(*ptr && !isblank(*ptr)) { len++; ptr++; }
-	    if (add_symbol(name, len, slot, addr, mem_ptr, symtab) < 0)
+	    if (voc_add(name, len, addr, mem_ptr, voc) == NOSYM)
 		printf("warning: could not add symbol %-*s to symtab\n",
 		       len, name);
 	    goto again;
@@ -296,7 +296,6 @@ again:
 	    *node_ptr = dest;
 	}
 	else {
-	    // printf("[%s:%03x]", f18_ins[insx].name, dest);
 	    ins |= (insx << 13);
 	    mem_ptr[addr] = encode_dest(enc, ins, MASK13, addr, dest);
 	}
@@ -308,19 +307,17 @@ again:
 	return -1;
     }
     slot++;
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
     switch(i) {
     case TOKEN_EMPTY: // assume rest of opcode are nops (warn?)
 	ins = (ins | (INS_NOP<<8) | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
 	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
-	// printf("[%s]", f18_ins[insx].name);	
 	ins |= (insx << 8);
 	break;
     case TOKEN_MNEMONIC2:
 	if (insx >= 0x20) return -1;
-	// printf("[%s:%03x]", f18_ins[insx].name, dest);
 	ins |= (insx<<8);
 	mem_ptr[addr] = encode_dest(enc, ins, MASK8, addr, dest);
 	return insx;
@@ -328,19 +325,17 @@ again:
 	return -1;
     }
     slot++;
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
     switch(i) {
     case TOKEN_EMPTY:
 	ins = (ins | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
 	mem_ptr[addr] = ins;
 	return insx;
     case TOKEN_MNEMONIC1:
-	// printf("[%s]", f18_ins[insx].name);	
 	ins |= (insx << 3);
 	break;
     case TOKEN_MNEMONIC2:
 	if (insx >= 0x20) return -1;
-	// printf("[%s:%03x]", f18_ins[insx].name, dest);
 	ins |= (insx<<3);
 	mem_ptr[addr] = encode_dest(enc, ins, MASK3, addr, dest);
 	return insx;
@@ -348,7 +343,7 @@ again:
 	return -1;
     }
     slot++;
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, symtab);
+    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
     switch(i) {
     case TOKEN_EMPTY:
 	ins = (ins | (INS_NOP>>2)) ^ IMASK;

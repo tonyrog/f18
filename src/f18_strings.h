@@ -92,6 +92,7 @@ extern const char SN_inv[];
 extern const char SN_invert[];
 extern const char SN_ip_PLUS_PLUS[];
 extern const char SN_jump[];
+extern const char SN_ldata[];
 extern const char SN_lsh[];
 extern const char SN_negate[];
 extern const char SN_next[];

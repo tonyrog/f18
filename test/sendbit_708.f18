@@ -20,7 +20,7 @@ org 0
   dup call:send1
   2/ next:loop
   @p . . 
-  1  ( send a ONE (stop -bit ?) )
+  1  ( send a ONE, stop -bit ? )
   call:send1
   ;
 

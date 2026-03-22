@@ -9,6 +9,7 @@
 
 #include "f18_types.h"
 #include "f18_sym.h"
+#include "f18_voc.h"
 
 #define INS_RETURN     0x00   // ;
 #define INS_EXECUTE    0x01   // ex
@@ -351,13 +352,13 @@ extern FILE* logout;
     } while(0)
 
 extern void f18_emu(node_t* p);
-extern char* f18_disasm_uins(int i, uint18_t addr, uint18_t I,
-			     const f18_symbol_table_t* symtab,
+extern char* f18_disasm_uins(int slot, uint18_t addr, uint18_t I,
+			     f18_voc_t voc,
 			     char** pptr, size_t maxlen);
 extern int f18_disasm_instruction(uint18_t addr, uint18_t I,
-				  const f18_symbol_table_t* symtab,
+				  f18_voc_t voc,
 				  char* ptr, size_t maxlen);
-extern void f18_disasm(const uint18_t* insp, const f18_symbol_table_t* symtab,
+extern void f18_disasm(const uint18_t* insp, f18_voc_t voc,
 		       uint18_t addr, size_t n);
 
 

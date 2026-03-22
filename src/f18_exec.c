@@ -853,24 +853,30 @@ int main(int argc, char** argv)
 	uint8_t heap[MAX_SCAN_HEAP_SIZE];
 	int line = 0;
 	char linebuf[MAX_LINE_LEN+1];
+	symindex_t si;
+	f18_voc_t voc;
 	int r;
 
 	// temporary symbol table memory used while loading node
 	INIT_SYMTAB(&symtab, heap, MAX_SCAN_HEAP_SIZE);
-
+	voc_setup(voc, &symtab, &no_symbols);
+	
 	while((r = f18_asm_line(file_fd,&line,linebuf,sizeof(linebuf),
-				&addr, &nid, np->ram, &symtab)) >= 0) {
+				&addr, &nid, np->ram, voc)) >= 0) {
 	    switch(r) {
 	    case META_NODE:
+		// fixme: multiple switch to same node !
 		if (np != NULL) { // find main in symtab
-		    if ((i = find_symbol_by_name("main", &symtab)) >= 0)
-			np->reg.p = symtab.symbol[i].value;
+		    if ((si = sym_find_by_name("main", &symtab)) != NOSYM)
+			np->reg.p = symtab.symbol[si].value;
 		    // printf("set p = %03x\n", np->reg.p);
-		    np->symtab = copy_symbols(&symtab);
+		    np->symtab = sym_copy_table(&symtab);
 		}
 		// reinitialize
 		INIT_SYMTAB(&symtab, heap, MAX_SCAN_HEAP_SIZE);
 		np = node[ID_TO_ROW(nid)][ID_TO_COLUMN(nid)];
+		voc_setup(voc, &symtab,
+			  SymTabMap[ID_TO_ROW(nid)][ID_TO_COLUMN(nid)]);
 		addr = 0;
 		break;
 	    case META_ORG:
@@ -893,11 +899,11 @@ int main(int argc, char** argv)
 	    }
 	}
 	if (np != NULL) { // find main in symtab
-	    if ((i = find_symbol_by_name("main", &symtab)) >= 0) {
-		np->reg.p = symtab.symbol[i].value;
+	    if ((si = sym_find_by_name("main", &symtab)) != NOSYM) {
+		np->reg.p = symtab.symbol[si].value;
 		// printf("set p = %03x\n", np->reg.p);
 	    }
-	    np->symtab = copy_symbols(&symtab);
+	    np->symtab = sym_copy_table(&symtab);
 	}
     }
 
@@ -932,12 +938,12 @@ int main(int argc, char** argv)
     if (id != 999) {
 	int i = ID_TO_ROW(id);
 	int j = ID_TO_COLUMN(id);
+	f18_voc_t voc;
+	
 	reg_node_t* np = (reg_node_t*) node[i][j];
-
+	
 	if (g_flags & FLAG_DUMP_ROM) {
 	    f18_rom_type_t rt;
-	    i = ID_TO_ROW(id);
-	    j = ID_TO_COLUMN(id);
 	    rt = ConfigMap[i][j].rom;
 	    
 	    PRINTF("Dump ROM\n");
@@ -948,12 +954,13 @@ int main(int argc, char** argv)
 	    PRINTF("  io_addr=%03x\n", ConfigMap[i][j].io_addr);
 	    PRINTF("  comm=%03x\n", ConfigMap[i][j].comm);
 	    PRINTF("  reset=%03x\n", ConfigMap[i][j].reset);
-	    
-	    f18_disasm(RomMap[rt].addr, SymTabMap[i][j], ROM_START,
-		       RomMap[rt].size);
+	    voc_setup(voc, (f18_symbol_table_t*) &no_symbols,
+		      SymTabMap[i][j]);
+	    f18_disasm(RomMap[rt].addr, voc, ROM_START, RomMap[rt].size);
 	}
 	if (g_flags & FLAG_DUMP_RAM) {
-	    f18_disasm(np->n.ram, np->n.symtab, RAM_START, (RAM_END-RAM_START)+1);
+	    voc_setup(voc, np->n.symtab, SymTabMap[i][j]);	    
+	    f18_disasm(np->n.ram, voc, RAM_START, (RAM_END-RAM_START)+1);
 	}
     }
     if (noexec)

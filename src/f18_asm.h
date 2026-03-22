@@ -8,13 +8,14 @@
 #define TOKEN_MNEMONIC1 1
 #define TOKEN_MNEMONIC2 2
 #define TOKEN_VALUE     3
+#define TOKEN_COMMA     4
 
-extern int parse_symbol(char** pptr, uint18_t* valuep,  f18_symbol_t* symtab);
+extern int parse_symbol(char** pptr, uint18_t* valuep,  f18_voc_t voc);
 extern int parse_mnemonic(char* word, int n);
 extern int parse_ins(char** pptr, uint18_t* insp,
 		     int slot, uint18_t addr,
 		     uint18_t* dstp,
-		     f18_symbol_table_t* symtab);
+		     f18_voc_t voc);
 
 extern f18_symbol_table_t* copy_symbols(f18_symbol_table_t* symtab);
 extern int f18_asm_line(int fd,
@@ -24,6 +25,6 @@ extern int f18_asm_line(int fd,
 			uint18_t* addr_ptr,
 			uint18_t* node_ptr,
 			uint18_t* data_ptr,
-			f18_symbol_table_t* symtab);
+			f18_voc_t voc);
 
 #endif

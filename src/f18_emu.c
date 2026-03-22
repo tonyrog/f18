@@ -41,7 +41,7 @@ const f18_symbol_t f18_ins[32] = {
     { 0x1f,   SYMSTR(a_BANG)}
 };
 
-const f18_symbol_table_t f18_ins_symtab = SYMTAB_INITALIZER(f18_ins);
+const f18_symbol_table_t ins_symbols = SYMTAB_INITALIZER(f18_ins);
 
 // NOTE! Addresses are sorted!
 const f18_symbol_t iosym[] = {
@@ -53,6 +53,7 @@ const f18_symbol_t iosym[] = {
     { IOREG____U, SYMSTR(DASH_DASH_DASH_u) },
     { IOREG_IO,   SYMSTR(io) },
     { IOREG___LU, SYMSTR(DASH_DASH_lu) },
+    { IOREG_LDATA, SYMSTR(data) },
     { IOREG___L_, SYMSTR(DASH_DASH_l_DASH) },
     { IOREG_RD_U, SYMSTR(rd_DASH_u) },
     { IOREG_RD__, SYMSTR(rd_DASH_DASH) },
@@ -64,7 +65,7 @@ const f18_symbol_t iosym[] = {
     { IOREG_R_L_, SYMSTR(r_DASH_l_DASH) },
 };
 
-const f18_symbol_table_t io_symtab  = SYMTAB_INITALIZER(iosym);
+const f18_symbol_table_t io_symbols  = SYMTAB_INITALIZER(iosym);
 
 // I do not think it matters in the emulator which way the push and pop goes
 #define PUSH_ds(np,val) ((np)->ds[SP] = (val), (SP = ((SP+1) & 0x7)))
@@ -153,14 +154,26 @@ uint18_t normalize_addr(uint18_t addr)
 
 static void dump_ram(node_t* np)
 {
-    f18_disasm(np->ram, NULL, RAM_START, 64);
+   int i = ID_TO_ROW(np->id);
+   int j = ID_TO_COLUMN(np->id);
+   f18_voc_t voc;
+
+    voc_setup(voc,
+	      np->symtab,
+ 	      (const f18_symbol_table_t* )SymTabMap[i][j]);    
+    f18_disasm(np->ram, voc, RAM_START, 64);
 }
 
 static void dump_rom(node_t* np)
 {
     int i = ID_TO_ROW(np->id);
-    int j = ID_TO_COLUMN(np->id);
-    f18_disasm(np->rom, SymTabMap[i][j], ROM_START, 64);
+    int j = ID_TO_COLUMN(np->id);    
+    f18_voc_t voc;
+    
+    voc_setup(voc,
+	      (f18_symbol_table_t*)&no_symbols,
+ 	      (const f18_symbol_table_t* )SymTabMap[i][j]);
+    f18_disasm(np->rom, voc, ROM_START, 64);
 }
 
 static void dump_ds(node_t* np)
@@ -254,7 +267,13 @@ char* disasm_uins(node_t* np, int slot, uint18_t addr, uint18_t I,
 {
     int i = ID_TO_ROW(np->id);
     int j = ID_TO_COLUMN(np->id);
-    return f18_disasm_uins(slot, addr, I, SymTabMap[i][j], &ptr, maxlen);
+    f18_voc_t voc;
+
+    voc_setup(voc,
+	      (f18_symbol_table_t*)&no_symbols,
+ 	      (const f18_symbol_table_t* )SymTabMap[i][j]);    
+    
+    return f18_disasm_uins(slot, addr, I, voc, &ptr, maxlen);
 }
 
 void f18_emu(node_t* np)
