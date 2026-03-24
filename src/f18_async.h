@@ -13,6 +13,16 @@
 #include "f18_byte_queue.h"
 #include <pthread.h>
 
+// State machine for 708 boot:
+// IDLE: waiting for first sync - block until data arrives
+// ACTIVE: receiving bits - block until data
+// COMPLETE: word done - non-blocking idle if no data (stay in @ loop)
+typedef enum {
+    ASYNC_STATE_IDLE = 0,    // Before first sync - block on @b
+    ASYNC_STATE_ACTIVE,      // Receiving bits - block on @b
+    ASYNC_STATE_COMPLETE     // Word done - non-blocking idle
+} async_state_t;
+
 // Async reader node (receives serial data for 708)
 typedef struct _async_reader_t {
     node_t n;                // dummy node for id
@@ -25,6 +35,7 @@ typedef struct _async_reader_t {
     byte_queue_t bq;
     volatile int sample_count;        // @b reads since last bit change
     volatile int bit_count;           // bits received in current word (0-29)
+    volatile async_state_t state;     // boot state machine
 } async_reader_t;
 
 // Async writer node (sends serial data from 708)

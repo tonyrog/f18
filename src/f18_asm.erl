@@ -199,7 +199,7 @@ code708(Opts) ->
 		   {def,"exit"} => 19 },
     SendLib = 
 	[
-	 [{word,"node"}, 708],
+	 [{word,"node"}, 708],      %% do not COUNT!!!
 	 %% : send = 0
 	 ['dup','dup','xor','.'],   %% push 0 
 	 [{call,{label,"_send8"}}],
@@ -209,26 +209,26 @@ code708(Opts) ->
 	 ['dup','dup','xor','.'],  %% push 0 
 	 [{call,{label,"_send1"}}],
 	 ['@p', '>r', '.', '.'],
-	 [7],
+	 [{literal,7}],
 	 %% : _loop = 8
 	 [dup,{call,{label,"_send1"}}],
 	 ['2/',{next,{label,"_loop"}}],
 	 ['@p','.','.','.'],
-	 [1],
+	 [{literal,1}],
 	 %% : _send1 = 12
 	 ['@p', 'and', '@p', '.'],
-	 [1],
-	 [3],
+	 [{literal,1}],
+	 [{literal,3}],
 	 ['xor','!b','@p','.'],
-	 [baud(Opts)],
+	 [{literal,baud(Opts)}],
 	 ['>r', '.', '.', '.'],
 	 ['unext', ';', '.', '.'],
 	 %% : exit = 19
 	 ['@p', {jump,{label,"_send8"}}],
-	 [1]
+	 [{literal,1}]
 	],
     Main = 
-	[
+	[[{word,":"},{word,"main"}],
 	 ['@p', {call,{label,"send"}}],
 	 [{literal,$O}],
 	 [drop, '@p', '.', '.'],
@@ -237,15 +237,15 @@ code708(Opts) ->
 	 [drop, '@p', '.', '.'],
 	 [{literal,$\n}],
 	 [{call,{label,"send"}}],
-	 [drop, ';']
+	 [drop, {jump, 16#aa}]
 	],
-    {SendLib ++ Main, length(SendLib), Opts1}.
+    {SendLib ++ Main, Opts1}.
 
 demo(DeviceName) ->
     Opts = #{ device => DeviceName, rom => basic, 
 	      encode => true, baud => 115200 },
-    {Asm,Compleation,Opts1} = code708(Opts),
-    boot_708_code(Opts1, Compleation, 0, Asm).
+    {Asm,Opts1} = code708(Opts),
+    boot_708_code(Opts1, "main", 0, Asm).
 
 %% load a simple code sequence
 %% 
@@ -258,14 +258,16 @@ boot_708(DeviceName, Opts) ->
 		  [[{literal,I}] || I <- [0,1,2,3,4,5,6,7,8,9]]).
 		  
 boot_708_code(Opts, Compleation, Transfer, Asm) ->
-    N = length(Asm),
-    Bootstream =
-	[[{literal, Compleation}],  %% compleation address (cold)
-	 [{literal, Transfer}],   %% transfer  adddress (start in RAM[0])
-	 [{literal, N}] | Asm ],
-    {ok, Code} = asm_lines(Bootstream, Opts),
+    {ok, Code, Opts1} = asm_lines(Asm, Opts),
+    N = length(Code),
+    Compleation1 = if is_integer(Compleation) -> 
+			   Compleation;
+		      is_list(Compleation) ->
+			   maps:get({def,Compleation},Opts1)
+		   end,
+    BootStream = [ Compleation1, Transfer, N | Code ],
     {ok,U,Pid} = start_uart(Opts),
-    f18_uart:send(U, Code),
+    f18_uart:send(U, BootStream),
     %% wait some time
     timer:sleep(3000),
     Pid ! stop.    
@@ -367,9 +369,9 @@ asm_lines([[]|Lines],Addr,Acc,Opts) ->
 asm_lines([Line|Lines],Addr,Acc,Opts) ->
     Cell = asm_line(Line, Addr, Opts),
     asm_lines(Lines,Addr+1,[Cell|Acc],Opts);
-asm_lines([],_Addr,Acc,_Opts) ->
+asm_lines([],_Addr,Acc,Opts) ->
     %% patch forward labels?
-    {ok, lists:reverse(Acc)}.
+    {ok, lists:reverse(Acc), Opts}.
 
 asm_line([{literal,A}],_Addr,_Opts) when is_integer(A) ->
     ?dbg("[0] literal ~w\n", [A]),
@@ -451,7 +453,7 @@ asm_ops([],Slot,Shift,Instr,Addr,Opts) when Slot =< 3 ->
 	3 -> asm_ops(['.'],Slot,Shift,Instr,Addr,Opts)
     end;
 asm_ops([],Slot,_Shift,Instr, Addr,Opts) when Slot > 3 ->
-    encode(Opts, Instr, 16#00000, Addr, 0).
+    encode(Opts, Instr, 16#00000, 0, 0).
 
 %% fixme: have a encode := invert, that keep op but xor the dest!?
 encode(#{ encode := true }, Instr, Mask, Addr, Dest) ->

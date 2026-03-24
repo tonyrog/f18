@@ -140,6 +140,11 @@ const f18_symbol_table_t io_symbols  = SYMTAB_INITALIZER(iosym);
 	np->reg.c = C;				\
     } while(0)
 
+// Light version - sync only T for IOREG handlers (e.g., SERDES checks T)
+#define SWAP_OUT_LIGHT(np) do {			\
+	np->reg.t = T;				\
+    } while(0)
+
 // wrap addresses into regular ROM/RAM/IO addresses
 uint18_t normalize_addr(uint18_t addr)
 {
@@ -386,22 +391,26 @@ unext:
 	goto next;
 
     case INS_FETCH_P:  //  @p ( -- x ) fetch via P auto-increament
-	P0 = P & MASK9;	
-	p_inc();	
+	P0 = P & MASK9;
+	p_inc();
+	SWAP_OUT_LIGHT(np);
 	PUSH_s(np, read_mem(np, P0, INS_FETCH_P));
 	break;
 
     case INS_FETCH_PLUS:  // @+ ( -- x ) fetch via A auto-increament
 	A0 = A & MASK9;
-	a_inc();	
+	a_inc();
+	SWAP_OUT_LIGHT(np);
 	PUSH_s(np, read_mem(np, A0, INS_FETCH_PLUS));
 	break;
 
     case INS_FETCH_B:  // @b ( -- x ) fetch via B
+	SWAP_OUT_LIGHT(np);
 	PUSH_s(np, read_mem(np, B, INS_FETCH_B));
 	break;
 
     case INS_FETCH:    // @ ( -- x ) fetch via A
+	SWAP_OUT_LIGHT(np);
 	PUSH_s(np, read_mem(np, A, INS_FETCH));
 	break;
 

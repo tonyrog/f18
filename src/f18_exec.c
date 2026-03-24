@@ -809,7 +809,7 @@ int main(int argc, char** argv)
 
 		r708.fd = master;
 		r708.baud = baud;
-		w708.fd = STDOUT_FILENO;
+		w708.fd = master; // STDOUT_FILENO;
 		w708.baud = baud;
 		np->n.read_ioreg = read_ioreg_708; // sync buffer read
 		break;		

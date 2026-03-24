@@ -30,10 +30,17 @@ void async_reader_init(async_reader_t* ap)
     byte_queue_init(&ap->bq);
     ap->sample_count = 1;
     ap->bit_count = 0;
+    ap->state = ASYNC_STATE_IDLE;
 }
 
 // read_ioreg for node 708 - synchronous bit delivery
 // Called when 708 reads from IO register
+//
+// State machine:
+//   IDLE     -> block until first data arrives, then ACTIVE
+//   ACTIVE   -> receiving bits, block if no data
+//   COMPLETE -> word done, non-blocking idle if no data (stay in @ loop)
+//
 uint18_t read_ioreg_708(node_t* np, uint18_t ioreg)
 {
     uint18_t ior_val;
@@ -49,8 +56,8 @@ uint18_t read_ioreg_708(node_t* np, uint18_t ioreg)
     // IOREG_IO (0x15D) is "---D" = GPIO only, handle specially
     int is_gpio_read = (ioreg == IOREG_IO) || (iodir && (dirs & iodir));
 
-    PRINTF("read_ioreg_708: ioreg=0x%03x iodir=0x%x dirs=0x%x gpio=%d\n",
-	   ioreg, iodir, dirs, is_gpio_read);
+    PRINTF("read_ioreg_708: ioreg=0x%03x iodir=0x%x dirs=0x%x gpio=%d state=%d\n",
+	   ioreg, iodir, dirs, is_gpio_read, r708.state);
 
     // If not a GPIO read, use default handler
     if (!is_gpio_read) {
@@ -59,36 +66,69 @@ uint18_t read_ioreg_708(node_t* np, uint18_t ioreg)
     }
 
     pin17 = byte_queue_curr(&r708.bq);
-    if (r708.sample_count <= 0) {  // next bit
-	if (r708.bit_count < BITS_PER_WORD) {
-	    // Within word or starting new word
-	    pin17 = byte_queue_deq(&r708.bq);  // May block if empty
-	    r708.bit_count++;
-	    // After bit 5 (sync pattern), add half-bit delay for center sampling
-	    switch(r708.bit_count) {
-	    case 8:  // sample 1.5 bit (stretch B0 instead of B0,START
-	    case 12:
-	    case 22:
-		r708.sample_count = SAMPLES_PER_BIT + (SAMPLES_PER_BIT / 2);
-		PRINTF("708/ bit=%d, pin=%d count=%d\n",
-		       r708.bit_count, pin17, r708.sample_count);
-		break;
-	    default:  // sample 1 bit
-		r708.sample_count = SAMPLES_PER_BIT;
-		PRINTF("708/ bit=%d,pin=%d,count=%d\n",
+
+    if (r708.sample_count <= 0) {  // time for next bit
+	switch (r708.state) {
+	case ASYNC_STATE_ACTIVE:
+	    if (r708.bit_count < BITS_PER_WORD) {
+		// Within word - block until data
+		pin17 = byte_queue_deq(&r708.bq);  // blocks
+		r708.bit_count++;
+		// After certain bits, add half-bit delay for center sampling
+		switch(r708.bit_count) {
+		case 8:  // sample 1.5 bit
+		case 12:
+		case 22:
+		    r708.sample_count = SAMPLES_PER_BIT + (SAMPLES_PER_BIT / 2);
+		    break;
+		default:
+		    r708.sample_count = SAMPLES_PER_BIT;
+		}
+		PRINTF("708/ ACTIVE: bit=%d, pin=%d, count=%d\n",
 		       r708.bit_count, pin17, r708.sample_count);
 	    }
-	}
-	else {
-	    // After 30 bits - get next word (block if needed)
-	    r708.bit_count = 0;  // Reset for next word
-	    PRINTF("708/ word done, waiting for next\n");
-	    pin17 = byte_queue_deq(&r708.bq);  // Block until next frame
-	    r708.bit_count++;
+	    else {
+		// Word complete - transition to COMPLETE
+		r708.state = ASYNC_STATE_COMPLETE;
+		r708.bit_count = 0;
+		PRINTF("708/ ACTIVE->COMPLETE: word done\n");
+		// Fall through to COMPLETE handling
+	    }
+	    if (r708.state != ASYNC_STATE_COMPLETE)
+		break;
+	    /* FALLTHROUGH */
+
+	case ASYNC_STATE_COMPLETE:
+	    // Word done - check for more data without blocking
+	    if (byte_queue_available(&r708.bq)) {
+		// More data - start next word
+		r708.state = ASYNC_STATE_ACTIVE;
+		pin17 = byte_queue_deq(&r708.bq);
+		r708.bit_count = 1;
+		r708.sample_count = SAMPLES_PER_BIT;
+		PRINTF("708/ COMPLETE->ACTIVE: next word, bit=%d, pin=%d\n",
+		       r708.bit_count, pin17);
+		break;
+	    }
+	    // No data - fall through to IDLE to block for next boot
+	    r708.state = ASYNC_STATE_IDLE;
+	    PRINTF("708/ COMPLETE->IDLE: no data, will block\n");
+	    /* FALLTHROUGH */
+
+	case ASYNC_STATE_IDLE:
+	    // First read - block until data arrives
+	    PRINTF("708/ IDLE: waiting for data...\n");
+	    pin17 = byte_queue_deq(&r708.bq);  // blocks
+	    r708.state = ASYNC_STATE_ACTIVE;
+	    r708.bit_count = 1;
 	    r708.sample_count = SAMPLES_PER_BIT;
+	    PRINTF("708/ IDLE->ACTIVE: bit=%d, pin=%d\n", r708.bit_count, pin17);
+	    break;
 	}
     }
-    r708.sample_count--;
+
+    if (r708.sample_count > 0)
+	r708.sample_count--;
 
     // Build IOR value with current PIN17 state
     ior_val = __atomic_load_n(&np->ior, __ATOMIC_SEQ_CST);
@@ -211,7 +251,7 @@ void async_writer(async_writer_t* ap)
 		PRINTF("async_writer: output byte %02x '%c'\n",
 		       b, (b >= 32 && b < 127) ? b : '?');
 		// fix sending
-		// write(ap->fd, &b, 1);
+		write(ap->fd, &b, 1);
 	    }
 	    bits = 0;
 	    count = 0;
