@@ -8,6 +8,19 @@
 #include "f18_asm.h"
 #include "f18_strings.h"
 
+//
+// parse:
+//   org  <number>
+//   node <number>
+//   ':'  <name> ...
+//   <uins>
+//   <uins>':'<dest>
+//   <word>           ( == call:<word-addr> )
+//   <word> ';'       ( == jump:<word-addr> )
+//   <number>
+//   <blank>
+//
+
 int parse_mnemonic(char* word, int len)
 {
     symindex_t si;
@@ -26,21 +39,12 @@ uint18_t encode_dest(int enc, uint18_t instr, uint18_t mask,
 {
     if (enc) {
 	uint18_t d = ((instr^IMASK)&~mask)|(addr&~mask)|(dest&mask);
-	// printf("inst=%02x, mask=%03x, addr=%03x, dest=%03x: d=%05x\n",
-	// instr, mask, addr, dest, d);
 	return d;
     }
     else
 	return instr | (addr & ~mask) | (dest & mask);
 }	    
 
-//
-// parse:
-//   <mnemonic>
-//   <mnemonic>':'<dest>
-//   <hex>
-//   <blank>
-//
 
 // skip to next character, skip blank and comments
 // (could be more FORTHy)
