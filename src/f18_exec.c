@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -22,11 +23,13 @@
 
 #include "f18.h"
 #include "f18_asm.h"
+#include "f18_dis.h"
 #include "f18_node.h"
 #include "f18_async.h"
 #include "f18_serdes.h"
 #include "f18_debug.h"
 #include "f18_tui.h"
+#include "f18_epoll.h"
 
 #define MAX_SCAN_HEAP_SIZE 256 // symbols table & names
 #define MAX_LINE_LEN 80
@@ -54,13 +57,15 @@ static struct termios tty_smode;
 static struct termios tty_rmode;
 static size_t  g_page_size = 0;
 uint18_t g_flags = 0;
-uint32_t g_v = 1, g_h = 1;  // Non-static for TUI access
 char g_pty_name[256] = "";  // PTY name for TUI display
 static char* g_step_spec = NULL;  // -I step node specification
 
+static pthread_t g_epoll_thread;
+static pthread_attr_t g_epoll_attr;
+
 // SERDES configuration: mode for each SERDES node (0=none, 1=server, 2=client)
-static int g_serdes_701_mode = 0;
-static int g_serdes_001_mode = 0;
+/// static int g_serdes_701_mode = 0;
+// static int g_serdes_001_mode = 0;
 
 // System thread state tracking (atomics for counters, mutex/cond for wait)
 static _Atomic int num_active = 0;
@@ -121,7 +126,7 @@ static SIGRETTYPE ctl_c(int);
 static SIGRETTYPE suspend(int);
 static SIGRETTYPE (*orig_ctl_c)(int);
 
-node_t* node[8][18];
+node_t* node[GRID_ROWS][GRID_COLS];
 
 SIGRETTYPE (*sys_sigset(int sig, SIGRETTYPE (*func)(int)))(int)
 {
@@ -232,8 +237,12 @@ int tty_init(int fd)
     return 0;
 }
 
-void usage(char* prog)
+void usage(char* prog, char* fmt, ...)
 {
+    va_list ap;
+    
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
     fprintf(stderr, "usage: %s [options]\n", prog);
     fprintf(stderr, " options:\n"
 	    "    -v               Enable verbose   (if debug compiled)\n"
@@ -253,9 +262,11 @@ void usage(char* prog)
 	    "    -b <baud>        Set async boot baud rate\n"
 	    "    -P               GPIO poll mode (no wakeup wait)\n"
 	    "    -A               Enable CPU affinity (pin threads to cores)\n"
-	    "    -L VxH           Set processor mesh layout (max 8x18)\n"
-	    "    -S <node>:<mode> SERDES mode for node 701 or 001\n"
-	    "                     mode: server or client\n"
+	    "    -S <node>:<mode>[:<path>]\n"
+	    "                     SERDES mode for node 701 or 001\n"
+	    "                     mode: server or client, path is the\n"
+	    "                     name of the socket to listen on or"
+	    "                     connect to\n"
 	);
     exit(1);
 }
@@ -412,8 +423,8 @@ void draw_com_map()
 {
     int v, h;
 
-    for (v = 0; v < 8; v++) {
-	for (h = 0; h < 18; h++) {
+    for (v = 0; v < GRID_ROWS; v++) {
+	for (h = 0; h < GRID_COLS; h++) {
 	    int i = v*3;
 	    int j = h*5;
 	    uint9_t comm = ConfigMap[v][h].comm;
@@ -526,8 +537,7 @@ int main(int argc, char** argv)
     int c;
     int i,j;
     useconds_t delay = 0;
-    char* opt_layout = NULL;
-    uint32_t h=18, v=8;
+    // uint32_t h=18, v=8;
     void* node_mem;
     uint8_t* np_mem;
     size_t alloc_size;
@@ -538,11 +548,19 @@ int main(int argc, char** argv)
     uint18_t id = 999;
     int noexec = 0;
     int baud = 9600;
+    int n001_mode;
+    char n001_path[MAX_SOCKET_NAMELEN];
+    int n701_mode;
+    char n701_path[MAX_SOCKET_NAMELEN];  
     
     g_page_size = sysconf(_SC_PAGESIZE);  // must be first!
     g_flags = 0;
+    n001_mode = 0;
+    n001_path[0] = '\0';
+    n701_mode = 0;
+    n701_path[0] = '\0';
 
-    check_clock();
+    // check_clock();
     
     while((c = getopt(argc, argv, "ivqtnPAl:b:d:I:L:D:f:GS:")) != -1) {
 	switch(c) {
@@ -555,44 +573,73 @@ int main(int argc, char** argv)
 	case 't': g_flags |= FLAG_TRACE; break;
 	case 'P': g_flags |= FLAG_GPIO_POLL; break;  // GPIO poll mode (no wakeup wait)
 	case 'A': g_flags |= FLAG_AFFINITY; break;   // CPU affinity for threads
-	case 'L': opt_layout = optarg; break;
 	case 'G':
 	    g_flags |= FLAG_DEBUG_ENABLE;
 	    g_flags |= FLAG_SILENT;
 	    break;
 	case 'S': {
-	    // Parse SERDES option: <node>:<mode>
+	    // Parse SERDES option: <node>:<mode>[:<path>]
 	    // e.g., "701:server" or "001:client"
+	    char* smode = NULL;
+	    int smode_len = 0;
+	    char* path = NULL;
+	    char* endptr = NULL;  
 	    int snode;
-	    char smode[16];
-	    if (sscanf(optarg, "%d:%15s", &snode, smode) != 2) {
-		fprintf(stderr, "Invalid SERDES option: %s\n", optarg);
-		usage(basename(argv[0]));
-	    }
-	    int mode_val = 0;
-	    if (strcmp(smode, "server") == 0)
-		mode_val = 1;
-	    else if (strcmp(smode, "client") == 0)
-		mode_val = 2;
+
+	    if ((smode = strchr(optarg, ':')) == NULL)
+		usage(basename(argv[0]), "Invalid SERDES option: %s\n", optarg);
+	    smode++;
+	    printf("OPTARG: %s\n", optarg);
+	    printf("SMODE: %s\n", smode);
+	    snode = strtol(optarg, &endptr, 0);
+	    printf("SNODE: %03d\n", snode);
+	    if (*endptr != ':')
+		usage(basename(argv[0]), "Invalid SERDES option: %s\n", optarg);
+	    if ((snode != 001) && (snode != 701))
+		usage(basename(argv[0]), "Invalid SERDES node: %d (use 701 or 001)\n", snode);
+	    if ((path = strchr(smode, ':')) == NULL)
+		smode_len = strlen(smode);
 	    else {
-		fprintf(stderr, "Invalid SERDES mode: %s (use 'server' or 'client')\n", smode);
-		usage(basename(argv[0]));
+		smode_len = path - smode;
+		path++;
 	    }
-	    if (snode == 701)
-		g_serdes_701_mode = mode_val;
-	    else if (snode == 1)
-		g_serdes_001_mode = mode_val;
-	    else {
-		fprintf(stderr, "Invalid SERDES node: %d (use 701 or 001)\n", snode);
-		usage(basename(argv[0]));
+	    printf("PATH: %s SMODE_LEN=%d\n", path, smode_len);	    
+	    printf("SMODE_LEN: %d\n", smode_len);
+	    
+	    if (snode == 701) {	    
+		if (path != NULL)
+		    strcpy(n701_path, path); // fixms: check length
 	    }
-	    break;
+	    else if (snode == 001) {
+		if (path != NULL)
+		    strcpy(n001_path, path); // fixms: check length		
+	    }
+	    if (strncmp(smode, "client", smode_len) == 0) {
+		if (snode == 701)
+		    n701_mode = SERDES_MODE_CLIENT;
+		else if (snode == 001) {
+		    n001_mode = SERDES_MODE_CLIENT;		    
+		}
+	    }
+	    else if (strncmp(smode, "server", smode_len) == 0) {
+		if (snode == 701) {
+		    n701_mode = SERDES_MODE_SERVER;
+		}
+		else if (snode == 001) {
+		    n001_mode = SERDES_MODE_SERVER;
+		}
+	    }
+	    else
+		usage(basename(argv[0]),
+		      "Invalid SERDES mode: %s (use 'server' or 'client')\n",
+		      optarg);
+	    // path name
 	}
 	case 'd': {
 	    char* endptr = NULL;
 	    if ((delay = strtol(optarg, &endptr,0)) == 0) {
 		if (endptr && (*endptr != '\0'))
-		    usage(basename(argv[0]));
+		    usage(basename(argv[0]), "bad delay %s", optarg);
 	    }
 	    break;
 	}
@@ -612,48 +659,48 @@ int main(int argc, char** argv)
 			ptr += (ptr[3] == ',') ? 4 : 3;
 		    }
 		    else
-			usage(basename(argv[0]));
+			usage(basename(argv[0]), "bad dump %s", optarg);
 		}
 		else if (strncmp(ptr, "ram", 3) == 0) {
 		    if ((ptr[3] == '\0') || (ptr[3] == ',')) {
 			g_flags |= FLAG_DUMP_RAM;
 			ptr += (ptr[3] == ',') ? 4 : 3;
 		    }
-		    else 
-			usage(basename(argv[0]));
+		    else
+			usage(basename(argv[0]), "bad dump %s", optarg);
 		}
 		else if (strncmp(ptr, "rom", 3) == 0) {
 		    if ((ptr[3] == '\0') || (ptr[3] == ',')) {
 			g_flags |= FLAG_DUMP_ROM;
 			ptr += (ptr[3] == ',') ? 4 : 3;
 		    }
-		    else 
-			usage(basename(argv[0]));
+		    else
+			usage(basename(argv[0]), "bad dump %s", optarg);
 		}		
 		else if (strncmp(ptr, "rs", 2) == 0) {
 		    if ((ptr[2] == '\0') || (ptr[2] == ',')) {
 			g_flags |= FLAG_DUMP_RS;
 			ptr += (ptr[2] == ',') ? 3 : 2;
 		    }
-		    else 
-			usage(basename(argv[0]));
+		    else
+			usage(basename(argv[0]), "bad dump %s", optarg);
 		}
 		else if (strncmp(ptr, "ds", 2) == 0) {
 		    if ((ptr[2] == '\0') || (ptr[2] == ',')) {
 			g_flags |= FLAG_DUMP_DS;
 			ptr += (ptr[2] == ',') ? 3 : 2;
 		    }
-		    else 
-			usage(basename(argv[0]));
+		    else
+			usage(basename(argv[0]), "bad dump %s", optarg);
 		}
 		else
-		    usage(basename(argv[0]));
+		    usage(basename(argv[0]), "bad dump %s", optarg);
 	    }
 	    break;
 	}
 	case '?':
 	default:
-	    usage(basename(argv[0]));
+	    usage(basename(argv[0]), "bad options '%c'", c);
 	}
     }
 
@@ -694,28 +741,7 @@ int main(int argc, char** argv)
 	}
     }
 
-    if (opt_layout) {
-	char* ptr = opt_layout;
-	v = strtol(ptr,&ptr,0);
-	if ((v != 0) && (*ptr == 'x')) {
-	    ptr++;
-	    h = strtol(ptr,&ptr,0);
-	    if ((h == 0) || (ptr && (*ptr != '\0')))
-		usage(basename(argv[0]));
-	}
-	else if ((v != 0) && (*ptr == '\0')) {
-	    // when only one numer is given assume it is 1xH
-	    h = v; v = 1;
-	}
-	else if ((v == 0) && (*ptr != '\0'))
-	    usage(basename(argv[0]));
-	if ((v > 8) || (h > 18))
-	    usage(basename(argv[0]));
-    }
-
-    g_v = v;
-    g_h = h;
-    alloc_size = v*h*(PAGE(NODE_SIZE));
+    alloc_size = GRID_ROWS*GRID_COLS*(PAGE(NODE_SIZE));
     if (g_flags & FLAG_VERBOSE) {
 	fprintf(stderr, "page size %ld\n", g_page_size);
 	fprintf(stderr, "alloc size: %ld\n", alloc_size);
@@ -724,7 +750,6 @@ int main(int argc, char** argv)
 	fprintf(stderr, "sizeof(node_t): %lu\n", sizeof(node_t));
 	fprintf(stderr, "sizeof(reg_node_t): %lu\n", sizeof(reg_node_t));
 	fprintf(stderr, "sizeof(serdes_node_t): %lu\n", sizeof(serdes_node_t));	
-	fprintf(stderr, "layout: %d x %d\n", v, h);
     }
 
     if (posix_memalign(&node_mem, g_page_size, alloc_size)) {
@@ -737,8 +762,8 @@ int main(int argc, char** argv)
 
     // start moving memory into the node data
     np_mem = (uint8_t*) node_mem;
-    for (i = 0; i < v; i++) {
-	for (j = 0; j < h; j++) {
+    for (i = 0; i < GRID_ROWS; i++) {
+	for (j = 0; j < GRID_COLS; j++) {
 	    reg_node_t* np;
 	    f18_rom_type_t rt;
 	    int node_id = MAKE_ID(i,j);
@@ -816,26 +841,25 @@ int main(int argc, char** argv)
 	    }
 	    case serdes_boot: {
 		serdes_node_t* sp = (serdes_node_t*) np;
-		char*mode = NULL;
 		
 		assert(node_id == 001 || node_id == 701);
-		serdes_node_init(sp, node_id);
-		if ((node_id == 701) && (g_serdes_701_mode > 0)) {
-		    mode = g_serdes_701_mode == 1 ? "server" : "client";
-		    if (serdes_setup(sp,mode) < 0) {		    
-			fprintf(stderr, "Failed to setup SERDES node 701\n");
+		// fixme: pass as argument to init?
+		if (node_id == 001) {
+		    serdes_node_init(sp,n001_mode,n001_path);
+		    if (serdes_setup(sp) < 0) {
+			fprintf(stderr, "Failed to setup SERDES node %03d\n",
+				node_id);
 			exit(1);
 		    }
 		}
-		else if ((node_id == 001) && (g_serdes_001_mode > 0)) {
-		    mode = g_serdes_001_mode == 1 ? "server" : "client";
-		    if (serdes_setup(sp,mode) < 0) {
-			fprintf(stderr, "Failed to setup SERDES node 001\n");
+		else if (node_id == 701) {
+		    serdes_node_init(sp,n701_mode,n701_path);    
+		    if (serdes_setup(sp) < 0) {
+			fprintf(stderr, "Failed to setup SERDES node %03d\n",
+				node_id);
 			exit(1);
 		    }
 		}
-		if (mode != NULL) 
-		    PRINTF("SERDES %03d initialized as %s\n",  node_id, mode);
 		break;
 	    }
 	    default:
@@ -908,13 +932,13 @@ int main(int argc, char** argv)
     }
 
     // init neighbours channels
-    for (i=0; i < v; i++) {
-	for (j = 0; j < h; j++) {
+    for (i=0; i < GRID_ROWS; i++) {
+	for (j = 0; j < GRID_COLS; j++) {
 	    reg_node_t* np = (reg_node_t*) node[i][j];
 
-	    if (i < v-1)
-		np->neighbour[UP]   = &((reg_node_t*)node[i+1][j])->chan;
-	    else if (i == v-1) {
+	    if (i < GRID_ROWS-1)
+		np->neighbour[UP] = &((reg_node_t*)node[i+1][j])->chan;
+	    else if (i == GRID_ROWS-1) {
 		if (np->n.id == 708) {
 		    np->neighbour[UP] = &r708.chan;    // read async
 		    r708.out = &np->chan;              //
@@ -928,7 +952,7 @@ int main(int argc, char** argv)
 		np->neighbour[DOWN] = &((reg_node_t*)node[i-1][j])->chan;
 	    if (j > 0)
 		np->neighbour[LEFT] = &((reg_node_t*)node[i][j-1])->chan;
-	    if (j < h-1)
+	    if (j < GRID_COLS-1)
 		np->neighbour[RIGHT] = &((reg_node_t*)node[i][j+1])->chan;
 
 	    // FIXME add io channels !
@@ -956,15 +980,23 @@ int main(int argc, char** argv)
 	    PRINTF("  reset=%03x\n", ConfigMap[i][j].reset);
 	    voc_setup(voc, (f18_symbol_table_t*) &no_symbols,
 		      SymTabMap[i][j]);
-	    f18_disasm(RomMap[rt].addr, voc, ROM_START, RomMap[rt].size);
+	    f18_disasm(logout,RomMap[rt].addr, voc, ROM_START, RomMap[rt].size);
 	}
 	if (g_flags & FLAG_DUMP_RAM) {
 	    voc_setup(voc, np->n.symtab, SymTabMap[i][j]);	    
-	    f18_disasm(np->n.ram, voc, RAM_START, (RAM_END-RAM_START)+1);
+	    f18_disasm(logout,np->n.ram, voc, RAM_START, (RAM_END-RAM_START)+1);
 	}
     }
     if (noexec)
 	exit(0);
+
+    pthread_attr_init(&g_epoll_attr);
+    pthread_attr_setstacksize(&g_epoll_attr, PAGE(STACK_SIZE));
+    if (pthread_create(&g_epoll_thread,&g_epoll_attr,
+		       f18_epoll_main, (void*) NULL) < 0) {
+	perror("pthread_create");
+	exit(1);
+    }
 
     // Initialize debugger if -G flag set
     if (g_flags & FLAG_DEBUG_ENABLE) {
@@ -972,8 +1004,8 @@ int main(int argc, char** argv)
 	if (g_step_spec)
 	    debug_parse_step_nodes(g_step_spec);
 	// Set debugger flag on step nodes
-	for (i = 0; i < (int)v; i++) {
-	    for (j = 0; j < (int)h; j++) {
+	for (i = 0; i < GRID_ROWS; i++) {
+	    for (j = 0; j < GRID_COLS; j++) {
 		reg_node_t* np = (reg_node_t*) node[i][j];
 		if (debug_is_step_node(np->n.id))
 		    np->n.flags |= FLAG_DEBUG_ENABLE;
@@ -988,10 +1020,10 @@ int main(int argc, char** argv)
     // Set num_active before creating threads to avoid race where main
     // thread checks the termination condition before threads have started
     // Check if node 708 exists (row 7, col 8) before including async threads
-    num_active = v * h;
+    num_active = GRID_ROWS * GRID_COLS;
 
-    for (i=0; i < v; i++) {
-	for (j = 0; j < h; j++) {
+    for (i=0; i < GRID_ROWS; i++) {
+	for (j = 0; j < GRID_COLS; j++) {
 	    reg_node_t* np = (reg_node_t*) node[i][j];
 
 	    if (np->n.id == 708) {
@@ -1070,11 +1102,11 @@ int main(int argc, char** argv)
 	}
 
 	// Pin node threads round-robin to remaining CPUs
-	for (i = v-1; i >= 0; i--) {
-	    for (j = 0; j < h; j++) {
+	for (i = GRID_ROWS-1; i >= 0; i--) {
+	    for (j = 0; j < GRID_COLS; j++) {
 		reg_node_t* np = (reg_node_t*) node[i][j];
 		// int proc = cpu % num_cpus
-		int proc = (((v-1-i) % num_cpus)  + j) % num_cpus;
+		int proc = (((GRID_ROWS-1-i) % num_cpus)  + j) % num_cpus;
 		CPU_ZERO(&cpuset);
 		CPU_SET(proc, &cpuset);
 		pthread_setaffinity_np(np->thread, sizeof(cpuset), &cpuset);
@@ -1097,8 +1129,8 @@ int main(int argc, char** argv)
     }
 
     // Signal all nodes to terminate and wake blocked threads
-    for (i = 0; i < (int)g_v; i++) {
-	for (j = 0; j < (int)g_h; j++) {
+    for (i = 0; i < GRID_ROWS; i++) {
+	for (j = 0; j < GRID_COLS; j++) {
 	    reg_node_t* np = (reg_node_t*) node[i][j];
 
 	    np->n.flags |= FLAG_TERMINATE;  // emulator loop
@@ -1106,17 +1138,17 @@ int main(int argc, char** argv)
 	}
     }
     // Terminate and join async threads only if node 708 exists
-    if (g_v > 7 && g_h > 8 && node[7][8] != NULL) {
+    if (node[7][8] != NULL) {
 	f18_chan_terminate(&r708.chan);
 	f18_chan_terminate(&w708.chan);
     }
 
     // Join all threads
-    for (i = 0; i < (int)g_v; i++)
-	for (j = 0; j < (int)g_h; j++)
+    for (i = 0; i < GRID_ROWS; i++)
+	for (j = 0; j < GRID_COLS; j++)
 	    pthread_join(((reg_node_t*)node[i][j])->thread, NULL);
 
-    if (g_v > 7 && g_h > 8 && node[7][8] != NULL) {
+    if (node[7][8] != NULL) {
 	pthread_join(r708.thread, NULL);
 	pthread_join(w708.thread, NULL);
     }

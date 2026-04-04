@@ -9,8 +9,11 @@
 #include "f18.h"
 
 // Transfer direction flags
-#define READ  1
-#define WRITE 2
+typedef enum {
+    F18_CHAN_NONE = 0,
+    F18_CHAN_READ = 1,
+    F18_CHAN_WRITE = 2
+} f18_chan_mode_t;
 
 // Rendezvous channel state
 typedef struct {
@@ -22,6 +25,7 @@ typedef struct {
     uint18_t rmask;     // DIR_BIT(x) directions wanting to read
     uint18_t data;      // write: value to send / read: received value
     int      completed; // transfer completed flag
+    int      io;        // =0 when no "gpio" CHAN_READ/CHAN_WRITE 
     int      wait;      // 1 when in cond_wait
     int      terminate; // 1 when time to terminate user thread
 } chan_t;
@@ -31,6 +35,9 @@ extern void f18_chan_init(chan_t* chan);
 
 // Signal channel to terminate
 extern void f18_chan_terminate(chan_t* chan);
+
+// Signal "gpio" on edge node 
+extern void f18_chan_wakeup(chan_t* chan, f18_chan_mode_t rw);
 
 // Try to write to channel (non-blocking)
 // Returns 1 if successful, 0 if no reader waiting
@@ -46,9 +53,9 @@ extern void f18_init_transfer(chan_t* chan, int rw,
 			      uint18_t value);
 
 // Mark transfer as complete
-extern void f18_complete_transfer(chan_t* chan, int rw);
+extern void f18_complete_transfer(chan_t* chan, f18_chan_mode_t rw);
 
 // Wait for transfer to complete (blocking)
-extern uint18_t f18_wait_transfer(chan_t* chan, int rw);
+extern uint18_t f18_wait_transfer(chan_t* chan, f18_chan_mode_t rw);
 
 #endif

@@ -13,8 +13,7 @@
 #include "f18_node.h"
 
 // External node array from f18_exec.c
-extern node_t* node[8][18];
-extern uint32_t g_v, g_h;
+extern node_t* node[GRID_ROWS][GRID_COLS];
 extern char g_pty_name[256];  // PTY name for 708
 
 // Unicode box drawing characters
@@ -41,11 +40,13 @@ extern char g_pty_name[256];  // PTY name for 708
 // Window positions and sizes (calculated in tui_init)
 static int term_rows, term_cols;
 static int grid_top, grid_left, grid_height, grid_width;
+static int grid_cols, grid_rows;
 static int reg_top, reg_left, reg_height, reg_width;
 static int stack_top, stack_left, stack_height, stack_width;
 static int disasm_top, disasm_left, disasm_height, disasm_width;
 static int ram_top, ram_left, ram_height, ram_width;
 static int cmd_top, cmd_left, cmd_height, cmd_width;
+
 
 static char cmd_line[256] = "";
 // static int cmd_pos = 0;  // TODO: for command editing
@@ -90,43 +91,34 @@ static void draw_box(int y, int x, int h, int w, const char* title)
     }
 }
 
-int tui_init(void)
+static inline int imin(int a, int b)
 {
-    setlocale(LC_ALL, "");
+    return (a < b) ? a : b;
+}
 
-    initscr();
-    start_color();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    nodelay(stdscr, TRUE);  // Non-blocking input
-    curs_set(0);            // Hide cursor
+// Calculate layout (assuming 80x24 minimum)
+// Title bar: row 0
+// Left side: grid (rows 1-12)
+// Right side: registers, stacks (rows 1-12)
+// Bottom left: disasm (rows 13-18)
+// Bottom right: RAM (rows 13-18)
+// Command line: rows 19-20
+// setup & recalculate on init and refresh
 
-    // Initialize colors
-    init_pair(COLOR_TITLE,   COLOR_WHITE, COLOR_BLUE);
-    init_pair(COLOR_BORDER,  COLOR_CYAN,  COLOR_BLACK);
-    init_pair(COLOR_FOCUS,   COLOR_BLACK, COLOR_YELLOW);
-    init_pair(COLOR_PAUSED,  COLOR_YELLOW, COLOR_BLACK);
-    init_pair(COLOR_RUNNING, COLOR_GREEN, COLOR_BLACK);
-    init_pair(COLOR_BLOCKED, COLOR_RED,   COLOR_BLACK);
-
+void tui_setup(void)
+{
     getmaxyx(stdscr, term_rows, term_cols);
-
-    // Calculate layout (assuming 80x24 minimum)
-    // Title bar: row 0
-    // Left side: grid (rows 1-12)
-    // Right side: registers, stacks (rows 1-12)
-    // Bottom left: disasm (rows 13-18)
-    // Bottom right: RAM (rows 13-18)
-    // Command line: rows 19-20
 
     grid_top = 1;
     grid_left = 0;
-    grid_width = term_cols / 2;
+    grid_width = (2*term_cols) / 3;
     grid_height = 12;
 
+    grid_cols = imin((grid_width-4)/4, GRID_COLS);  // number of cells displayed
+    grid_rows = imin((grid_height-4), GRID_ROWS);
+
     reg_top = 1;
-    reg_left = term_cols / 2;
+    reg_left = grid_left + grid_width; 
     reg_width = term_cols - reg_left;
     reg_height = 5;
 
@@ -149,6 +141,30 @@ int tui_init(void)
     cmd_left = 0;
     cmd_width = term_cols;
     cmd_height = 2;
+}
+
+
+int tui_init(void)
+{
+    setlocale(LC_ALL, "");
+
+    initscr();
+    start_color();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    nodelay(stdscr, TRUE);  // Non-blocking input
+    curs_set(0);            // Hide cursor
+
+    // Initialize colors
+    init_pair(COLOR_TITLE,   COLOR_WHITE, COLOR_BLUE);
+    init_pair(COLOR_BORDER,  COLOR_CYAN,  COLOR_BLACK);
+    init_pair(COLOR_FOCUS,   COLOR_BLACK, COLOR_YELLOW);
+    init_pair(COLOR_PAUSED,  COLOR_YELLOW, COLOR_BLACK);
+    init_pair(COLOR_RUNNING, COLOR_GREEN, COLOR_BLACK);
+    init_pair(COLOR_BLOCKED, COLOR_RED,   COLOR_BLACK);
+
+    tui_setup();
 
     return 0;
 }
@@ -162,7 +178,10 @@ node_t* tui_get_focused_node(void)
 {
     int row = ID_TO_ROW(g_debugger.focus_node);
     int col = ID_TO_COLUMN(g_debugger.focus_node);
-    if (row >= 0 && row < (int)g_v && col >= 0 && col < (int)g_h)
+    if ((row >= 0) &&
+	(row < grid_rows) &&
+	(col >= 0) &&
+	(col < grid_cols))
         return node[row][col];
     return NULL;
 }
@@ -214,16 +233,16 @@ void tui_draw_grid(void)
     // Draw column headers
     y = grid_top + 1;
     mvprintw(y, grid_left + 3, "  ");
-    for (j = 0; j < (int)g_h && j < 9; j++) {
+    for (j = 0; j < grid_cols; j++) {
         mvprintw(y, grid_left + 4 + j * 4, "%02d", j);
     }
 
     // Draw nodes
-    for (i = (int)g_v - 1; i >= 0 && (g_v - 1 - i) < 8; i--) {
-        y = grid_top + 2 + (g_v - 1 - i);
+    for (i = grid_rows-1; i >= 0 && (grid_rows - 1 - i) < 8; i--) {
+        y = grid_top + 2 + (grid_rows - 1 - i);
         mvprintw(y, grid_left + 1, "%d", i);
 
-        for (j = 0; j < (int)g_h && j < 9; j++) {
+        for (j = 0; j < grid_cols; j++) {
             reg_node_t* np = (reg_node_t*)node[i][j];
             int id = MAKE_ID(i, j);
             int is_focus = (id == (int)g_debugger.focus_node);
@@ -556,10 +575,11 @@ void tui_draw_help(void)
 
 void tui_refresh(void)
 {
+    node_t* np = tui_get_focused_node();
+    
     erase();
 
-    node_t* np = tui_get_focused_node();
-
+    tui_setup();
     tui_draw_title();
     tui_draw_grid();
     tui_draw_registers(np);
@@ -639,19 +659,19 @@ int tui_handle_input(int ch)
     }
 
     case KEY_UP:
-        g_debugger.cursor_row = (g_debugger.cursor_row + 1) % g_v;
+        g_debugger.cursor_row = (g_debugger.cursor_row + 1) % grid_rows;
         break;
 
     case KEY_DOWN:
-        g_debugger.cursor_row = (g_debugger.cursor_row + g_v - 1) % g_v;
+        g_debugger.cursor_row = (g_debugger.cursor_row + grid_rows - 1) % grid_rows;
         break;
 
     case KEY_LEFT:
-        g_debugger.cursor_col = (g_debugger.cursor_col + g_h - 1) % g_h;
+        g_debugger.cursor_col = (g_debugger.cursor_col + grid_cols-1) % grid_cols;
         break;
 
     case KEY_RIGHT:
-        g_debugger.cursor_col = (g_debugger.cursor_col + 1) % g_h;
+        g_debugger.cursor_col = (g_debugger.cursor_col + 1) % grid_cols;
         break;
 
     case '\n':

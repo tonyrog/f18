@@ -12,10 +12,18 @@
 #include "f18_node.h"
 #include "f18_socket.h"
 
+typedef enum {
+    SERDES_MODE_NONE=0,
+    SERDES_MODE_SERVER=1,
+    SERDES_MODE_CLIENT=2,
+} serdes_mode_t;
+
 // SERDES node - "inherits" from reg_node_t
 typedef struct {
     reg_node_t rn;           // must be first (inheritance)
     f18_socket_t socket;     // socket connection
+    serdes_mode_t mode;                // server / client
+    char path[MAX_SOCKET_NAMELEN];
     int transmitting;        // 1 if currently transmitting
 } serdes_node_t;
 
@@ -26,11 +34,10 @@ typedef struct {
 #define SERDES_TX_ENABLE 0x20000
 
 // Initialize SERDES node
-extern void serdes_node_init(serdes_node_t* sp, int node_id);
+extern void serdes_node_init(serdes_node_t* sp, int mode, const char* path);
 
 // Setup SERDES socket connection
-// mode: "server" or "client"
-extern int serdes_setup(serdes_node_t* sp, const char* mode);
+extern int serdes_setup(serdes_node_t* sp);
 
 // SERDES read ioreg - handles SERDES protocol with fallback to f18_read_ioreg
 extern uint18_t serdes_read_ioreg(node_t* np, uint18_t ioreg);

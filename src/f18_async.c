@@ -214,12 +214,12 @@ void async_writer(async_writer_t* ap)
 		;
 	    else
 	    {
-		f18_init_transfer(&ap->chan, READ, DIR_BIT(GPIO), 0, 0);
+		f18_init_transfer(&ap->chan,F18_CHAN_READ,DIR_BIT(GPIO),0,0);
 		if (f18_chan_read(rp, GPIO, &value)) {
-		    f18_complete_transfer(&ap->chan, READ);
+		    f18_complete_transfer(&ap->chan, F18_CHAN_READ);
 		}
 		else {
-		    value = f18_wait_transfer(&ap->chan, READ);
+		    value = f18_wait_transfer(&ap->chan, F18_CHAN_READ);
 		    if (ap->chan.terminate)
 			break;
 		}

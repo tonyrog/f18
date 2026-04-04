@@ -11,13 +11,15 @@ typedef enum {
     SOCK_MODE_CLIENT
 } sock_mode_t;
 
+#define MAX_SOCKET_NAMELEN 108
+
 // Socket connection state
 typedef struct {
     sock_mode_t mode;
     int listen_fd;       // Server: listening socket
     int conn_fd;         // Connected socket (server after accept, client after connect)
-    char path[108];      // Socket path (max for sun_path)
-    int node_id;         // Associated node (701 or 001)
+    char path[MAX_SOCKET_NAMELEN];      // Socket path (max for sun_path)
+    // int node_id;         // Associated node (701 or 001)
     int connected;       // 1 if connection established
 } f18_socket_t;
 
@@ -31,6 +33,7 @@ extern int f18_socket_server(f18_socket_t* sp, const char* path);
 // Connect to server socket
 // Returns 0 on success, -1 on error
 extern int f18_socket_client(f18_socket_t* sp, const char* path);
+extern int f18_socket_connect(f18_socket_t* sp);
 
 // Accept connection (for server mode)
 // Returns 0 on success, -1 on error (non-blocking, returns -1 with EAGAIN if no connection)

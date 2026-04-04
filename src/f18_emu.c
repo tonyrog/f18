@@ -5,6 +5,7 @@
 #include "f18_debug.h"
 #include "f18_node.h"
 #include "f18_strings.h"
+#include "f18_dis.h"
 
 const f18_symbol_t f18_ins[32] = {
     { 0x00,   SYMSTR(SEMI) },     // slot 3
@@ -166,7 +167,7 @@ static void dump_ram(node_t* np)
     voc_setup(voc,
 	      np->symtab,
  	      (const f18_symbol_table_t* )SymTabMap[i][j]);    
-    f18_disasm(np->ram, voc, RAM_START, 64);
+    f18_disasm(stdout, np->ram, voc, RAM_START, 64);
 }
 
 static void dump_rom(node_t* np)
@@ -178,7 +179,7 @@ static void dump_rom(node_t* np)
     voc_setup(voc,
 	      (f18_symbol_table_t*)&no_symbols,
  	      (const f18_symbol_table_t* )SymTabMap[i][j]);
-    f18_disasm(np->rom, voc, ROM_START, 64);
+    f18_disasm(stdout, np->rom, voc, ROM_START, 64);
 }
 
 static void dump_ds(node_t* np)

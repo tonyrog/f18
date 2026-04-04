@@ -11,14 +11,18 @@
 #include "f18_sym.h"
 #include "f18_voc.h"
 
+// GA144 
+#define GRID_ROWS 8
+#define GRID_COLS 18
+
 #define INS_RETURN     0x00   // ;
 #define INS_EXECUTE    0x01   // ex
-#define INS_PJUMP      0x02   // jump <10-bit>
-#define INS_PCALL      0x03   // call <10-bit>
+#define INS_PJUMP      0x02   // jump: <dest>
+#define INS_PCALL      0x03   // call: <dest>
 #define INS_UNEXT      0x04   // micronext
-#define INS_NEXT       0x05   // next <10-bit>
-#define INS_IF         0x06   //  if  <10-bit>
-#define INS_MINUS_IF   0x07   // -if  <10-bit>
+#define INS_NEXT       0x05   // next <dest>
+#define INS_IF         0x06   //  if  <dest>
+#define INS_MINUS_IF   0x07   // -if  <dest>
 #define INS_FETCH_P    0x08   // @p
 #define INS_FETCH_PLUS 0x09   // @+
 #define INS_FETCH_B    0x0a   // @b
@@ -352,15 +356,6 @@ extern FILE* logout;
     } while(0)
 
 extern void f18_emu(node_t* p);
-extern char* f18_disasm_uins(int slot, uint18_t addr, uint18_t I,
-			     f18_voc_t voc,
-			     char** pptr, size_t maxlen);
-extern int f18_disasm_instruction(uint18_t addr, uint18_t I,
-				  f18_voc_t voc,
-				  char* ptr, size_t maxlen);
-extern void f18_disasm(const uint18_t* insp, f18_voc_t voc,
-		       uint18_t addr, size_t n);
-
 
 // System thread state tracking
 extern void sys_thread_started(void);
@@ -392,6 +387,43 @@ static inline uint9_t dirbits(int i, int j, uint9_t ioreg)
     if ((j & 1))
 	dir = (dir & 0x5) | ((dir & 2) << 2) | ((dir & 8) >> 2);
     return dir;
+}
+
+// Helper: check if ioreg targets Up port for this node
+static inline int is_up_port(node_t* np, uint18_t ioreg)
+{
+    if ((ioreg & F18_DIR_MASK) == F18_DIR_BITS) {
+	uint18_t dirs = dirbits(ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), ioreg);
+	return (dirs & DIR_BIT(UP)) != 0;
+    }
+    return 0;
+}
+
+// Helper: check if ioreg targets Left port for this node
+static inline int is_left_port(node_t* np, uint18_t ioreg)
+{
+    if ((ioreg & F18_DIR_MASK) == F18_DIR_BITS) {
+	uint18_t dirs = dirbits(ID_TO_ROW(np->id), ID_TO_COLUMN(np->id), ioreg);
+	return (dirs & DIR_BIT(LEFT)) != 0;
+    }
+    return 0;
+}
+
+// check if instruction may be in slot = 3
+// ; | unext | @p | !p | +* | + | dup 
+static inline int maybe_last_uinst(uint5_t uins)
+{
+    return (uins & 0x3) == 0;
+}
+
+// ; | ex | jump: | call: | next: | if: | -if: (when not slot = 3)
+static inline int is_last_uinst(uint5_t uins)
+{
+    if (uins >= INS_FETCH_P)
+	return 0;
+    if (uins == INS_UNEXT)
+	return 0;
+    return 1;
 }
 
 #endif

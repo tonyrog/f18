@@ -14,9 +14,9 @@
 //   node <number>
 //   ':'  <name> ...
 //   <uins>
-//   <uins>':'<dest>
-//   <word>           ( == call:<word-addr> )
-//   <word> ';'       ( == jump:<word-addr> )
+//   <uins-colon> <dest>
+//   <word>           ( == call: <word-addr> )
+//   <word> ';'       ( == jump: <word-addr> )
 //   <number>
 //   <blank>
 //

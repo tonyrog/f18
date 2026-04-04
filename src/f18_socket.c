@@ -32,7 +32,13 @@ int f18_socket_server(f18_socket_t* sp, const char* path)
     struct sockaddr_un addr;
     int fd;
 
-    // Remove existing socket file
+    // Check that path ends in .sock as a safe guard gainst removing
+    // random files by misstake.
+
+    if (strcmp(path+strlen(path)-5, ".sock") != 0) {
+	fprintf(stderr, "socket file name does not have .sock suffix!\n");
+	exit(1);
+    }
     unlink(path);
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -44,13 +50,12 @@ int f18_socket_server(f18_socket_t* sp, const char* path)
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
+    
     if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("bind");
         close(fd);
         return -1;
     }
-
     if (listen(fd, 1) < 0) {
         perror("listen");
         close(fd);
@@ -64,12 +69,31 @@ int f18_socket_server(f18_socket_t* sp, const char* path)
     strncpy(sp->path, path, sizeof(sp->path) - 1);
 
     printf("SERDES server listening on %s\n", path);
-    return 0;
+    return fd;
+}
+
+int f18_socket_connect(f18_socket_t* sp)
+{
+    struct sockaddr_un addr;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, sp->path, sizeof(addr.sun_path) - 1);
+
+    if (connect(sp->conn_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+            return -1;  // No connection yet (non-blocking)
+        }
+        perror("connect");
+        return -1;
+    }
+    sp->connected = 1;
+    printf("SERDES client connected to %s\n", sp->path);
+    return sp->conn_fd;
 }
 
 int f18_socket_client(f18_socket_t* sp, const char* path)
 {
-    struct sockaddr_un addr;
     int fd;
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -77,32 +101,19 @@ int f18_socket_client(f18_socket_t* sp, const char* path)
         perror("socket");
         return -1;
     }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("connect");
-        close(fd);
-        return -1;
-    }
-
     sp->mode = SOCK_MODE_CLIENT;
+    sp->connected = 0;
+    strncpy(sp->path, path, sizeof(sp->path) - 1);
     sp->listen_fd = -1;
     sp->conn_fd = fd;
-    sp->connected = 1;
-    strncpy(sp->path, path, sizeof(sp->path) - 1);
-
-    printf("SERDES client connected to %s\n", path);
-    return 0;
+    return f18_socket_connect(sp);
 }
 
 int f18_socket_accept(f18_socket_t* sp)
 {
     int fd;
 
-    if (sp->mode != SOCK_MODE_SERVER || sp->listen_fd < 0) {
+    if ((sp->mode != SOCK_MODE_SERVER) || (sp->listen_fd < 0)) {
         return -1;
     }
 
@@ -112,7 +123,7 @@ int f18_socket_accept(f18_socket_t* sp)
 
     fd = accept(sp->listen_fd, NULL, NULL);
     if (fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
             return -1;  // No connection yet (non-blocking)
         }
         perror("accept");
@@ -135,7 +146,7 @@ void f18_socket_close(f18_socket_t* sp)
         close(sp->listen_fd);
         sp->listen_fd = -1;
     }
-    if (sp->mode == SOCK_MODE_SERVER && sp->path[0]) {
+    if ((sp->mode == SOCK_MODE_SERVER) && sp->path[0]) {
         unlink(sp->path);
     }
     sp->connected = 0;
@@ -153,7 +164,7 @@ int f18_socket_read(f18_socket_t* sp, uint32_t* word)
     ssize_t n;
     size_t total = 0;
 
-    if (!sp->connected || sp->conn_fd < 0) {
+    if (!sp->connected || (sp->conn_fd < 0)) {
         return -1;
     }
 
@@ -169,7 +180,6 @@ int f18_socket_read(f18_socket_t* sp, uint32_t* word)
         }
         total += n;
     }
-
     *word = buf[0] | (buf[1] << 8) | ((buf[2] & 0x03) << 16);
     return 0;
 }
@@ -199,6 +209,5 @@ int f18_socket_write(f18_socket_t* sp, uint32_t word)
         }
         total += n;
     }
-
     return 0;
 }

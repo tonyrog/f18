@@ -36,10 +36,19 @@ void f18_chan_init(chan_t* chan)
     pthread_cond_init(&chan->cond, NULL);
     chan->wmask = 0;
     chan->rmask = 0;
-    chan->data = 0;
+    chan->data = 0;    
     chan->completed = 0;
+    chan->io = 0;    
     chan->wait = 0;
     chan->terminate = 0;        
+}
+
+void f18_chan_wakeup(chan_t* chan, f18_chan_mode_t rw)
+{
+    pthread_mutex_lock(&chan->lock);
+    chan->io = rw;
+    pthread_cond_broadcast(&chan->cond);
+    pthread_mutex_unlock(&chan->lock);
 }
 
 void f18_chan_terminate(chan_t* chan)
@@ -165,9 +174,9 @@ void f18_init_transfer(chan_t* chan, int rw,
 		       uint18_t value)
 {
     pthread_mutex_lock(&chan->lock);
-    if (rw & READ)
+    if (rw & F18_CHAN_READ)
 	chan->rmask = rdirs;
-    if (rw & WRITE) {
+    if (rw & F18_CHAN_WRITE) {
 	chan->data = value;
 	chan->wmask = wdirs;
     }
@@ -175,12 +184,12 @@ void f18_init_transfer(chan_t* chan, int rw,
     pthread_mutex_unlock(&chan->lock);
 }
 
-void f18_complete_transfer(chan_t* chan, int rw)
+void f18_complete_transfer(chan_t* chan, f18_chan_mode_t rw)
 {
     pthread_mutex_lock(&chan->lock);
-    if (rw & READ)
+    if (rw & F18_CHAN_READ)
 	chan->rmask = 0;
-    if (rw & WRITE)
+    if (rw & F18_CHAN_WRITE)
 	chan->wmask = 0;
     chan->completed = 1;
     pthread_mutex_unlock(&chan->lock);
@@ -188,7 +197,7 @@ void f18_complete_transfer(chan_t* chan, int rw)
 
 // wait for a reader/writer to find us and complete the transfer    
 
-uint18_t f18_wait_transfer(chan_t* chan, int rw)
+uint18_t f18_wait_transfer(chan_t* chan, f18_chan_mode_t rw)
 {
     uint18_t value = 0;
     sys_enter_blocked_port();
@@ -198,11 +207,11 @@ uint18_t f18_wait_transfer(chan_t* chan, int rw)
     while (!chan->completed && !chan->terminate)
 	pthread_cond_wait(&chan->cond, &chan->lock);
     chan->wait = 0;
-    if (rw & READ) {
+    if (rw & F18_CHAN_READ) {
 	chan->rmask = 0;
 	value = chan->data;
     }
-    if (rw & WRITE) {
+    if (rw & F18_CHAN_WRITE) {
 	chan->wmask = 0;
     }
     pthread_mutex_unlock(&chan->lock);
@@ -229,12 +238,12 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
 	    if (f18_chan_write(dp->ioc, GPIO, value))
 		;
 	    else {
-		f18_init_transfer(&dp->chan, WRITE, 0, DIR_BIT(GPIO), value);
+		f18_init_transfer(&dp->chan, F18_CHAN_WRITE, 0, DIR_BIT(GPIO), value);
 		if (f18_chan_write(dp->ioc, GPIO, value)) {
-		    f18_complete_transfer(&dp->chan, WRITE);
+		    f18_complete_transfer(&dp->chan, F18_CHAN_WRITE);
 		}
 		else {
-		    f18_wait_transfer(&dp->chan, WRITE);
+		    f18_wait_transfer(&dp->chan, F18_CHAN_WRITE);
 		}
 	    }
 	}
@@ -263,7 +272,7 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     }
 
     // setup for transfer to dirs
-    f18_init_transfer(&dp->chan, WRITE, 0, dirs, value);
+    f18_init_transfer(&dp->chan, F18_CHAN_WRITE, 0, dirs, value);
 
     for (dir = 0; dir < 4; dir++) {
 	if (!(dirs & DIR_BIT(dir)))
@@ -271,7 +280,7 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
 	if ((rp = dp->neighbour[dir]) == NULL)
 	    continue;
 	if (f18_chan_write(rp, dir, value)) {
-	    f18_complete_transfer(&dp->chan, WRITE);
+	    f18_complete_transfer(&dp->chan, F18_CHAN_WRITE);
 	    return;
 	}
     }
@@ -279,7 +288,7 @@ void f18_write_ioreg(node_t* np, uint18_t ioreg, uint18_t value)
     // Phase 3: wait for a reader to find us and complete the transfer
     dp->debug.blocked_addr = ioreg;
     dp->debug.blocked_dir = 1;  // write
-    f18_wait_transfer(&dp->chan, WRITE);
+    f18_wait_transfer(&dp->chan, F18_CHAN_WRITE);
     dp->debug.blocked_addr = 0;
 }
 
@@ -379,7 +388,7 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	    return value;
     }
 
-    f18_init_transfer(&dp->chan, READ, dirs, 0, 0);
+    f18_init_transfer(&dp->chan, F18_CHAN_READ, dirs, 0, 0);
 
     for (dir = 0; dir < 4; dir++) {
 	if (!(dirs & DIR_BIT(dir)))
@@ -387,14 +396,14 @@ uint18_t f18_read_ioreg(node_t* np, uint18_t ioreg)
 	if ((rp = dp->neighbour[dir]) == NULL)
 	    continue;
 	if (f18_chan_read(rp, dir, &value)) {
-	    f18_complete_transfer(&dp->chan, READ);
+	    f18_complete_transfer(&dp->chan, F18_CHAN_READ);
 	    return value;
 	}
     }
 
     dp->debug.blocked_addr = ioreg;
     dp->debug.blocked_dir = 0;  // read
-    value = f18_wait_transfer(&dp->chan, READ);
+    value = f18_wait_transfer(&dp->chan, F18_CHAN_READ);
     dp->debug.blocked_addr = 0;
 
     if (np->flags & FLAG_TERMINATE)
