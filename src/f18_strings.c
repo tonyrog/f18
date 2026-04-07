@@ -70,10 +70,14 @@ const char SN_DASH_DASH_u_SLASH_mod[] = { 'R', 7, 45,45,117,47,109,111,100,0};
 const char SN_DASH_dac[] = { 'R', 4, 45,100,97,99,0};
 // string: "-if"
 const char SN_DASH_if[] = { 'R', 3, 45,105,102,0};
+// string: "-if:"
+const char SN_DASH_if_COLON[] = { 'R', 4, 45,105,102,58,0};
 // string: "-u/mod"
 const char SN_DASH_u_SLASH_mod[] = { 'R', 6, 45,117,47,109,111,100,0};
 // string: "."
 const char SN_DOT[] = { 'R', 1, 46,0};
+// string: ":"
+const char SN_COLON[] = { 'R', 1, 58,0};
 // string: "1+"
 const char SN_1_PLUS[] = { 'R', 2, 49,43,0};
 // string: "1-"
@@ -130,6 +134,8 @@ const char SN_bs_AT[] = { 'R', 3, 98,115,64,0};
 const char SN_byte[] = { 'R', 4, 98,121,116,101,0};
 // string: "call"
 const char SN_call[] = { 'R', 4, 99,97,108,108,0};
+// string: "call:"
+const char SN_call_COLON[] = { 'R', 5, 99,97,108,108,58,0};
 // string: "cell+"
 const char SN_cell_PLUS[] = { 'R', 5, 99,101,108,108,43,0};
 // string: "cell-"
@@ -164,6 +170,8 @@ const char SN_ibit[] = { 'R', 4, 105,98,105,116,0};
 const char SN_idle[] = { 'R', 4, 105,100,108,101,0};
 // string: "if"
 const char SN_if[] = { 'R', 2, 105,102,0};
+// string: "if:"
+const char SN_if_COLON[] = { 'R', 3, 105,102,58,0};
 // string: "init"
 const char SN_init[] = { 'R', 4, 105,110,105,116,0};
 // string: "inpt"
@@ -178,6 +186,8 @@ const char SN_invert[] = { 'R', 6, 105,110,118,101,114,116,0};
 const char SN_ip_PLUS_PLUS[] = { 'R', 4, 105,112,43,43,0};
 // string: "jump"
 const char SN_jump[] = { 'R', 4, 106,117,109,112,0};
+// string: "jump:"
+const char SN_jump_COLON[] = { 'R', 5, 106,117,109,112,58,0};
 // string: "ldata"
 const char SN_ldata[] = { 'R', 5, 108,100,97,116,97,0};
 // string: "lsh"
@@ -186,12 +196,18 @@ const char SN_lsh[] = { 'R', 3, 108,115,104,0};
 const char SN_negate[] = { 'R', 6, 110,101,103,97,116,101,0};
 // string: "next"
 const char SN_next[] = { 'R', 4, 110,101,120,116,0};
+// string: "next:"
+const char SN_next_COLON[] = { 'R', 5, 110,101,120,116,58,0};
+// string: "node"
+const char SN_node[] = { 'R', 4, 110,111,100,101,0};
 // string: "noop"
 const char SN_noop[] = { 'R', 4, 110,111,111,112,0};
 // string: "obit"
 const char SN_obit[] = { 'R', 4, 111,98,105,116,0};
 // string: "or"
 const char SN_or[] = { 'R', 2, 111,114,0};
+// string: "org"
+const char SN_org[] = { 'R', 3, 111,114,103,0};
 // string: "over"
 const char SN_over[] = { 'R', 4, 111,118,101,114,0};
 // string: "page!"
@@ -338,3 +354,5 @@ const char SN_r_DASH_DASH_DASH[] = { 'R', 4, 114,45,45,45,0};
 const char SN_r_DASH_lu[] = { 'R', 4, 114,45,108,117,0};
 // string: "r-l-"
 const char SN_r_DASH_l_DASH[] = { 'R', 4, 114,45,108,45,0};
+// string: ""
+const char SN_[] = { 'R', 0, 0};

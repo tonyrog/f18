@@ -8,44 +8,6 @@
 #include "f18_asm.h"
 #include "f18_strings.h"
 
-//
-// parse:
-//   org  <number>
-//   node <number>
-//   ':'  <name> ...
-//   <uins>
-//   <uins-colon> <dest>
-//   <word>           ( == call: <word-addr> )
-//   <word> ';'       ( == jump: <word-addr> )
-//   <number>
-//   <blank>
-//
-
-int parse_mnemonic(char* word, int len)
-{
-    symindex_t si;
-    if ((si = sym_find_by_namelen(word, len, &ins_symbols)) != NOSYM)
-	return f18_ins[si].value;
-    if ((len == 3) && (memcmp(word, "org", 3) == 0))
-	return META_ORG;
-    if ((len == 4) && (memcmp(word, "node", 4) == 0))
-	return META_NODE;    
-    return -1;
-}
-
-// fixme: have a encode := invert, that keep op but xor the dest!?
-uint18_t encode_dest(int enc, uint18_t instr, uint18_t mask,
-		     uint18_t addr, uint18_t dest)
-{
-    if (enc) {
-	uint18_t d = ((instr^IMASK)&~mask)|(addr&~mask)|(dest&mask);
-	return d;
-    }
-    else
-	return instr | (addr & ~mask) | (dest & mask);
-}	    
-
-
 // skip to next character, skip blank and comments
 // (could be more FORTHy)
 static char* next_non_blank(char* ptr)
@@ -74,44 +36,92 @@ static char* next_blank(char* ptr)
 	case '\0': return ptr;
 	case ' ':  return ptr;
 	case '\t': return ptr;
+	case '\n': return ptr;
 	default: ptr++; break;
 	}
     }
     return ptr;
 }
 
-static int is_number(char* arg, int len, uint18_t* valp)
+// <hex> = [0-9a-fA-F]
+// check and return number 0x<hex>+ | 0<hex>+) | [0-9]+
+// return 0 if not number and 1 otherwise
+
+static int is_number(char* ptr, int len, int base, uint18_t* valp)
 {
     uint18_t value = 0;
-    char* ptr = arg;
+    char* ptr_end = ptr + len;
     int n = 0;
 
-    if ((ptr[0] == '0')) {
-	if (ptr[1] == 'x') ptr += 2;	
-	while(isxdigit(*ptr)) {
-	    if ((*ptr >= '0') && (*ptr <= '9'))
-		value = (value << 4) + (*ptr-'0');
-	    else if ((*ptr >= 'A') && (*ptr <= 'F'))
-		value = (value << 4) + ((*ptr-'A')+10);
-	    else
-		value = (value << 4) + ((*ptr-'a')+10);
-	    ptr++;
-	    n++;
+    if (base == 0) {
+	if ((len >= 2) && (ptr[0]=='0') && (ptr[1] == 'x')) {
+	    ptr += 2;
+	    base = 16;
 	}
-	*valp = value;
-	return (n > 0);
+	else if ((len >= 1) && (ptr[0] == '0')) { // in C lingua this is 8
+	    base = 16;
+	}
+	else
+	    base = 10;
     }
-    else {
-	while(isdigit(*ptr)) {
-	    value = value*10 + (*ptr-'0');
-	    ptr++;
-	    n++;
-	}
+    while(ptr < ptr_end) {
+	int c = *ptr++;
+	if ((c >= '0') && (c <= '9'))
+	    c -= '0';
+	else if ((c >= 'A') && (c <= 'F'))
+	    c = (c - 'A') + 10;
+	else if ((c >= 'a') && (c <= 'f'))
+	    c = (c - 'a') + 10;
+	if (c >= base)
+	    return 0;
+	n++;
+	value = value*base + c;
     }
     *valp = value;
-    return (n > 0);    
+    return (n > 0);
 }
+
+
+// fixme: have a encode := invert, that keep op but xor the dest!?
+uint18_t encode_dest(int enc, uint18_t instr, uint18_t mask,
+		     uint18_t addr, uint18_t dest)
+{
+    if (enc) {
+	uint18_t d = ((instr^IMASK)&~mask)|(addr&~mask)|(dest&mask);
+	return d;
+    }
+    else
+	return instr | (addr & ~mask) | (dest & mask);
+}	    
   
+//
+// parse:
+//   org  <number>
+//   node <number>
+//   ':'  <name> ...
+//   call: dest
+//   jump: dest
+//   next: dest
+//   if: dest
+//   -if: dest
+//   call:dest
+//   jump:dest
+//   next:dest
+//   if:dest
+//   -if:dest
+//   dest             ( == call: dest )
+//   dest ';'         ( == jump: dest )
+//   <number>
+//   <blank>
+//
+
+void print_word(char* msg, char* ptr, char* ptr_end)
+{
+    fwrite(msg, sizeof(char), strlen(msg), stdout);
+    fprintf(stdout, "[");
+    fwrite(ptr, sizeof(char), ptr_end - ptr, stdout);
+    fprintf(stdout, "]\n");
+}
 
 int parse_ins(char** pptr,uint18_t* insp,
 	      int slot, uint18_t addr,
@@ -119,97 +129,110 @@ int parse_ins(char** pptr,uint18_t* insp,
 	      f18_voc_t voc)
 {
     char* ptr = *pptr;
-    char* word;
-    char* arg;
+    char* ptr1;
     uint18_t value = 0;
     symindex_t si;
     int len = 0;
     int ins;
-    int want_arg = 0;
 
     ptr = next_non_blank(ptr);
-    // printf("INS: %s\n", ptr);
-    word = ptr;
-    while (*ptr && !isblank(*ptr) && (*ptr != ':')) { ptr++; len++; }
-    if ((len == 0) && (ptr[0] == ':')) {
-	*insp = META_DEF;
-	*dstp = 0;
-	*pptr = ptr+1;
-	return TOKEN_MNEMONIC2;
-    }
-    if (len == 0)
+    ptr1 = next_blank(ptr);
+    print_word("INS", ptr, ptr1);
+    if ((len = ptr1-ptr) == 0) {
+	*pptr = ptr1;
 	return TOKEN_EMPTY;
-    ins = parse_mnemonic(word, len);
-    len = 0;
-    switch(ins) {
-    case -1:
-	ptr = word;
-	break;
-    case INS_PJUMP:
-    case INS_PCALL:
-    case INS_NEXT:
-    case INS_IF:
-    case INS_MINUS_IF:
-	want_arg = 1;
-	if (*ptr == ':') { // force?
-	    ptr++;
-	    goto dest_arg;
-	}
-	break;
-    case META_ORG:
-	want_arg = 1;	
-	goto number_arg;
-	break;
-    case META_NODE:
-	want_arg = 1;
-	goto number_arg;
-	break;	
-    default:
-	goto done;
     }
 
-dest_arg: // parse number or dest
-number_arg:
+    // NUMBER
+    if (is_number(ptr, len, 0, &value)) {
+	*pptr = ptr1;	
+	*insp = value;
+	return TOKEN_VALUE;
+    }
+    // CONSTANT
+    else if ((si=sym_find_by_namelen(ptr,len,&io_symbols)) != NOSYM) {
+	*pptr = ptr1;		
+	*insp = io_symbols.symbol[si].value;
+	return TOKEN_VALUE;
+    }
+    // WORD
+    if ((si = sym_find_by_namelen(ptr,len,&ins_symbols)) != NOSYM) {
+	// INSTRUCTION
+	*pptr = ptr1;
+	ptr = ptr1;
+	ins = f18_ins[si].value;
+	len = 0;
+	switch(ins) {
+	case INS_PJUMP:
+	case INS_PCALL:
+	case INS_NEXT:
+	case INS_IF:
+	case INS_MINUS_IF:
+	    goto dest;
+	case META_DEF:
+	    *insp = ins;
+	    return TOKEN_MNEMONIC2;
+	case META_ORG:
+	case META_NODE:
+	    goto dest;
+	default:  // regular instruction
+	    *insp = ins;
+	    *dstp = value;
+	    return TOKEN_MNEMONIC1;
+	}
+    }
+    ins = INS_PCALL;
+    goto dest1;
+    
+dest:
+    // scan name constant
     ptr = next_non_blank(ptr);
-    arg = ptr;
-    ptr = next_blank(ptr);
-    len = ptr - arg;
-    if (is_number(arg, len, &value))
-	goto done;
-    if ((si = sym_find_by_namelen(arg, len, &io_symbols)) != NOSYM) {
-	value = io_symbols.symbol[si].value;
-	len = 1;
-	goto done;
-    }
-    else if ((si = voc_find_by_namelen(arg, len, voc)) != NOSYM) {
-	if (VOC_SYMTYP(voc, si) == 'R') { // unresolved
-	    value = VOC_SYMVAL(voc, si);
-	}	
-	else if (VOC_SYMTYP(voc, si)== 'U') { // unresolved
-	    voc_insert_patch(si, slot, addr, voc);
-	    value = 0;
-	}
-	len = 1;
-	goto done;
-    }
-    ptr = (char*) arg;
-
-done:
-    if (want_arg && (len == 0)) {
-	char* name = ptr;
-	while(*ptr && !isblank(*ptr)) { len++; ptr++; }
-	if ((si = voc_insert(name, len, voc)) != NOSYM) {
-	    voc_insert_patch(si, slot, addr, voc);
-	}
-    }
-    *pptr = ptr;
-    if (ins >= 0) {
+    ptr1 = next_blank(ptr);
+    print_word("DST", ptr, ptr1);
+    len = ptr1 - ptr;
+dest1:
+    if (is_number(ptr,len,0,&value)) {
+	printf("NUMBER %d\n", value);
+	*pptr = ptr1;	
 	*insp = ins;
 	*dstp = value;
-	if (want_arg && (len > 0))
-	    return TOKEN_MNEMONIC2;
-	return TOKEN_MNEMONIC1;
+	return TOKEN_MNEMONIC2;
     }
+    else if ((si=sym_find_by_namelen(ptr,len,&io_symbols)) != NOSYM) {
+	*pptr = ptr1;
+	*insp = ins;
+	*dstp = io_symbols.symbol[si].value;
+	return TOKEN_MNEMONIC2;
+    }
+
+    // WORD
+    if ((si = voc_find_by_namelen(ptr, len, voc)) != NOSYM) {
+	if (VOC_SYMTYP(voc, si) == 'R') {
+	    *pptr = ptr1;
+	    *dstp = VOC_SYMVAL(voc, si);
+	    *insp = INS_PCALL;
+	    return TOKEN_MNEMONIC2;
+	}
+	else if (VOC_SYMTYP(voc, si)== 'U') { // unresolved
+	    voc_insert_patch(si, slot, addr, voc);
+	    *pptr = ptr1;	    
+	    *insp = INS_PCALL;
+	    *dstp = 0;
+	    return TOKEN_MNEMONIC2;
+	}
+	return TOKEN_ERROR;	
+    }
+    else {
+	if ((si = voc_insert(ptr, len, voc)) != NOSYM) {
+	    voc_insert_patch(si, slot, addr, voc);
+	    *pptr = ptr1;
+	    *insp = INS_PCALL;
+	    *dstp = 0;
+	    return TOKEN_MNEMONIC2;
+	}
+	return TOKEN_ERROR;
+    }
+    *pptr = ptr1;
     if ((len == 0) || !(isblank(*ptr) || (*ptr=='\0'))  )
 	return TOKEN_ERROR;
     *insp = value;
@@ -225,10 +248,7 @@ done:
 //   -3  EOF (closed)
 //
 //
-int f18_asm_line(int fd,
-		 int* line_ptr,
-		 char* line_buf,
-		 size_t line_buf_size,
+int f18_asm_line(int fd, int* line_ptr, char* line_buf, size_t line_buf_size,
 		 uint18_t* addr_ptr,uint18_t* node_ptr,
 		 uint18_t* mem_ptr, f18_voc_t voc)
 {
@@ -238,7 +258,6 @@ int f18_asm_line(int fd,
     uint18_t ins = 0;
     uint18_t insx;
     int enc = 1;
-    int slot = 0;
     uint18_t addr = *addr_ptr & MASK6;
 again:
     i = 0;
@@ -267,9 +286,9 @@ again:
     }
     line_buf[i] = '\0';
     ptr = line_buf;
-    // printf("LINE: %d: %s\n", *line_ptr, line_buf);
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
-    // printf("i = %d, insx=%03x, dest=%05x\n", i, insx, dest);
+    printf("LINE: %d: %s\n", *line_ptr, line_buf);
+    i = parse_ins(&ptr, &insx, 0, addr, &dest, voc);
+    printf("i=%d,s=0,insx=%03x, dest=%05x\n", i, insx, dest);
     switch(i) {
     case TOKEN_EMPTY:
 	goto again;
@@ -277,31 +296,33 @@ again:
 	ins = (insx << 13);
 	break;
     case TOKEN_MNEMONIC2:
-	if (insx == META_DEF) {
+	switch(insx) {
+	case META_DEF: {
 	    char* name;
 	    int len = 0;
-	    while(*ptr && isblank(*ptr)) ptr++;
+	    ptr = next_non_blank(ptr);
 	    name = ptr;
-	    while(*ptr && !isblank(*ptr)) { len++; ptr++; }
+	    ptr = next_blank(ptr);
+	    len = ptr - name;
 	    if (voc_add(name, len, addr, mem_ptr, voc) == NOSYM)
 		printf("warning: could not add symbol %-*s to symtab\n",
 		       len, name);
 	    goto again;
 	}
-	if (insx == META_ORG) {
+	case META_ORG:
 	    *addr_ptr = dest;
 	    addr = dest & MASK6;
-	}
-	else if (insx == META_NODE) {
-	    // 000 - 717
+	    break;
+	case META_NODE: // 000 - 717
 	    if ( ((dest / 100) > 7) ||
 		 ((dest % 100) > 17))
 		return -1;
 	    *node_ptr = dest;
-	}
-	else {
+	    break;
+	default:
 	    ins |= (insx << 13);
-	    mem_ptr[addr] = encode_dest(enc, ins, MASK13, addr, dest);
+	    mem_ptr[addr] = encode_dest(enc, ins, MASK13, addr, dest);	    
+	    break;
 	}
 	return insx;
     case  TOKEN_VALUE:
@@ -310,8 +331,8 @@ again:
     default:
 	return -1;
     }
-    slot++;
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
+    i = parse_ins(&ptr,&insx,1,addr,&dest,voc);
+    printf("i=%d,s=1,insx=%03x, dest=%05x\n", i, insx, dest);    
     switch(i) {
     case TOKEN_EMPTY: // assume rest of opcode are nops (warn?)
 	ins = (ins | (INS_NOP<<8) | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
@@ -328,8 +349,8 @@ again:
     default:
 	return -1;
     }
-    slot++;
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
+    i = parse_ins(&ptr,&insx,2,addr,&dest,voc);
+    printf("i=%d,s=2,insx=%03x, dest=%05x\n", i, insx, dest);        
     switch(i) {
     case TOKEN_EMPTY:
 	ins = (ins | (INS_NOP<<3) | (INS_NOP>>2)) ^ IMASK;
@@ -346,8 +367,8 @@ again:
     default:
 	return -1;
     }
-    slot++;
-    i = parse_ins(&ptr, &insx, slot, addr, &dest, voc);
+    i = parse_ins(&ptr,&insx,3,addr,&dest,voc);
+    printf("i=%d,s=3,insx=%03x, dest=%05x\n", i, insx, dest);        
     switch(i) {
     case TOKEN_EMPTY:
 	ins = (ins | (INS_NOP>>2)) ^ IMASK;
@@ -359,8 +380,8 @@ again:
 		    f18_ins[insx].name);
 	    return -1;
 	}
-	// printf("[%s]", f18_ins[insx].name);		
 	ins = (ins | (insx >> 2)) ^ IMASK; // add op and encode
+	printf("mem_ptr=%p,addr=%03x, ins=%05x\n", mem_ptr, addr, ins);
 	mem_ptr[addr] = ins;
 	return insx;
     default:

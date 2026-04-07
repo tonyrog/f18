@@ -7,10 +7,10 @@
 #include "f18_strings.h"
 #include "f18_dis.h"
 
-const f18_symbol_t f18_ins[32] = {
-    { 0x00,   SYMSTR(SEMI) },     // slot 3
-    { 0x01,   SYMSTR(ex) },
-    { 0x02,   SYMSTR(jump) },
+const f18_symbol_t f18_ins[32+3+5] = {
+    { 0x00,   SYMSTR(SEMI)},     // slot 3
+    { 0x01,   SYMSTR(ex)},
+    { 0x02,   SYMSTR(jump)},
     { 0x03,   SYMSTR(call)},
     { 0x04,   SYMSTR(unext)},     // slot 3
     { 0x05,   SYMSTR(next)},
@@ -39,7 +39,19 @@ const f18_symbol_t f18_ins[32] = {
     { 0x1c,   SYMSTR(DOT)},        // slot 3
     { 0x1d,   SYMSTR(GT_r)},
     { 0x1e,   SYMSTR(b_BANG)},
-    { 0x1f,   SYMSTR(a_BANG)}
+    { 0x1f,   SYMSTR(a_BANG)},
+    // meta words
+    { META_DEF, SYMSTR(COLON) },
+    { META_ORG, SYMSTR(org) },
+    { META_NODE, SYMSTR(node) },
+    
+    // words using : last in name
+    { 0x02,   SYMSTR(jump_COLON) },    
+    { 0x03,   SYMSTR(call_COLON) },
+    { 0x05,   SYMSTR(next_COLON)},    
+    { 0x06,   SYMSTR(if_COLON)},    
+    { 0x07,   SYMSTR(DASH_if_COLON)},
+    
 };
 
 const f18_symbol_table_t ins_symbols = SYMTAB_INITALIZER(f18_ins);

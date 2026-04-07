@@ -13,35 +13,35 @@ org 0
 
 : send8 ( n -- n )
   dup dup xor .    ( push 0 )
-  call:send1       ( send start bit)
+  send1       ( send start bit)
   @p >r . .        ( push 7 )
   7
 : loop
-  dup call:send1
-  2/ next:loop
+  dup send1
+  2/ next: loop
   @p . . 
   1  ( send a ONE, stop -bit ? )
-  call:send1
+  send1
   ;
 
 : send ( n -- n )
   dup dup xor .    ( push 0 )
-  call:send8       ( dummy send )
+  send8       ( dummy send )
   drop
-  call:send8
-  call:send8
-  call:send8
+  send8
+  send8
+  send8
   drop
   ;
 
 : main
   @p b!      ( set address )
   io         ( gpio )
-  @p call:send  ( emit 'O' )
+  @p send  ( emit 'O' )
   0x4f
-  @p call:send  ( emit 'K' )
+  @p send  ( emit 'K' )
   0x4b
-  @p call:send  ( emit newline )
+  @p send  ( emit newline )
   0x0A
   @p >r ;
   0xa9

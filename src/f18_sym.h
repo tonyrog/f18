@@ -51,7 +51,7 @@ typedef struct {
   .symbol = (f18_symbol_t*)(sarr),		\
   .next = ((f18_symbol_t*)(sarr))+(sizeof((sarr))/sizeof(f18_symbol_t)), }
 
-extern const f18_symbol_t f18_ins[32];
+extern const f18_symbol_t f18_ins[32+3+5];
 extern const f18_symbol_table_t ins_symbols;
 extern const f18_symbol_table_t no_symbols;
 extern const f18_symbol_table_t io_symbols;

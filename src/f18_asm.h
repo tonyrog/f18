@@ -11,7 +11,6 @@
 #define TOKEN_COMMA     4
 
 extern int parse_symbol(char** pptr, uint18_t* valuep,  f18_voc_t voc);
-extern int parse_mnemonic(char* word, int n);
 extern int parse_ins(char** pptr, uint18_t* insp,
 		     int slot, uint18_t addr,
 		     uint18_t* dstp,

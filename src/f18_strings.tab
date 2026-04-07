@@ -34,8 +34,10 @@
 --u/mod
 -dac
 -if
+-if:
 -u/mod
 .
+:
 1+
 1-
 18ibits
@@ -64,6 +66,7 @@ bitsy
 bs@
 byte
 call
+call:
 cell+
 cell-
 char+
@@ -81,6 +84,7 @@ half
 ibit
 idle
 if
+if:
 init
 inpt
 interp
@@ -88,13 +92,17 @@ inv
 invert
 ip++
 jump
+jump:
 ldata
 lsh
 negate
 next
+next:
+node
 noop
 obit
 or
+org
 over
 page!
 page@
